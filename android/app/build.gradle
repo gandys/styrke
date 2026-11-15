@@ -1,0 +1,34 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.gabriel.styrke'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.gabriel.styrke'
+        minSdk 29
+        targetSdk 35
+        // CI passes -Pvc=<run number> so every build installs over the previous one
+        versionCode((project.findProperty('vc') ?: '1') as Integer)
+        versionName '1.0.' + (project.findProperty('vc') ?: '0')
+    }
+
+    // One fixed signing key, kept in the repository, so that every build can be installed as an
+    // update over the last one without uninstalling (uninstalling would wipe the on-device data).
+    signingConfigs {
+        debug {
+            storeFile file('../styrke.keystore')
+            storePassword 'styrke-sideload'
+            keyAlias 'styrke'
+            keyPassword 'styrke-sideload'
+        }
+    }
+    buildTypes {
+        debug { signingConfig signingConfigs.debug }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    lint { abortOnError false; checkReleaseBuilds false }
+}

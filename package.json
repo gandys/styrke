@@ -1,0 +1,16 @@
+{
+  "name": "styrke",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Styrke - gym diary with load/fatigue planning and weight-adjusted volume",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "@fontsource/barlow": "^5.0.0",
+    "@fontsource/barlow-condensed": "^5.0.0",
+    "esbuild": "^0.24.0"
+  }
+}
