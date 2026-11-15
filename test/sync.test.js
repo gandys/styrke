@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { state, local, _reset, commit, serialize } from '../src/store.js';
-import { syncNow, syncState } from '../src/sync.js';
+import { syncNow, syncState, testGithub, cleanRepo } from '../src/sync.js';
 
 // A tiny in-memory stand-in for the GitHub contents API.
 function fakeGithub() {
@@ -9,6 +9,8 @@ function fakeGithub() {
   const enc = t => Buffer.from(t, 'utf8').toString('base64'), dec = b => Buffer.from(b, 'base64').toString('utf8');
   const res = (status, body) => ({ ok: status < 400, status, json: async () => body, text: async () => (typeof body === 'string' ? body : JSON.stringify(body)) });
   globalThis.fetch = async (url, opts = {}) => {
+    // like the real API from a browser: a trailing slash or doubled slash fails before any response
+    if (/\/$/.test(url) || /[^:]\/\//.test(url)) throw new TypeError('Failed to fetch');
     const path = decodeURIComponent(url.split('/contents/')[1] || '');
     const method = opts.method || 'GET'; log.push(method + ' ' + path);
     if (!url.includes('/contents/')) return res(200, { private: true, full_name: 'me/data', permissions: { push: true } });
@@ -36,6 +38,12 @@ test('GitHub sync: first push, merge from another device, inbox plan import, CSV
   _reset(); local.github = { owner: 'me', repo: 'data', token: 'tok' }; local.lastCsv = '';
   state.settings = { _u: 5, bodyweight: 80 };
   state.sessions.a = { id: 'a', date: '2026-11-01', items: [{ k: 'ex', ex: 'leg_press', sets: [{ w: 60, r: 10, d: true }] }], u: 10 };
+  const info = await testGithub(local.github);   // the 'Connect' button
+  assert.equal(info.private, true);
+  assert.deepEqual(cleanRepo('gandys', 'styrke-data'), { owner: 'gandys', repo: 'styrke-data' });
+  assert.deepEqual(cleanRepo('', 'https://github.com/gandys/styrke-data.git'), { owner: 'gandys', repo: 'styrke-data' });
+  assert.deepEqual(cleanRepo('gandys/styrke-data', ''), { owner: 'gandys', repo: 'styrke-data' });
+  assert.deepEqual(cleanRepo(' gandys ', 'styrke-data/'), { owner: 'gandys', repo: 'styrke-data' });
   let r = await syncNow();
   assert.equal(r.ok, true, syncState.msg);
   assert.ok(gh.files.has('styrke-data.json'));

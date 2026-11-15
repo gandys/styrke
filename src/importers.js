@@ -153,11 +153,12 @@ export function importSetRows(rows) {
   const byDate = new Map();
   for (const r of recs) { if (!byDate.has(r.date)) byDate.set(r.date, []); byDate.get(r.date).push(r); }
   const exCache = new Map();
-  let nSets = 0, nCardio = 0, skipped = 0;
+  let nSets = 0, nCardio = 0, skipped = 0, keptEdited = 0;
   const created = new Set();
   const before = new Set(Object.keys(state.ex));
   for (const [date, list] of byDate) {
     const sid = 'imp-' + date;
+    if (state.sessions[sid]?.edited) { keptEdited++; continue; }   // you changed this day in the app: leave it alone
     const items = []; const byEx = new Map();
     for (const r of list) {
       if (!exCache.has(r.name)) exCache.set(r.name, resolveExercise(r.name));
@@ -184,7 +185,7 @@ export function importSetRows(rows) {
   }
   for (const id of Object.keys(state.ex)) if (!before.has(id) && state.ex[id].custom) created.add(state.ex[id].name);
   commit('import');
-  return { days: byDate.size, sets: nSets, cardio: nCardio, skipped, created: [...created], from: recs[0]?.date, to: recs[recs.length - 1]?.date };
+  return { days: byDate.size - keptEdited, sets: nSets, cardio: nCardio, skipped, keptEdited, created: [...created], from: recs[0]?.date, to: recs[recs.length - 1]?.date };
 }
 
 export async function importFile(file) {
@@ -220,11 +221,11 @@ export function importPlan(obj) {
   }
   for (const s of obj.sessions) {
     const date = toDate(s.date); if (!date) continue;
+    if (String(s.kind || '').toLowerCase() === 'rest') continue;   // a rest day is simply a day that is not committed
     const pd = state.plan[date] && !state.plan[date].deleted ? state.plan[date] : { date, on: true, type: 'auto', items: [] };
     pd.on = true; pd.items = pd.items || [];
     const kind = String(s.kind || 'strength').toLowerCase();
-    if (kind === 'rest') { pd.type = 'rest'; }
-    else if (kind === 'strength') {
+    if (kind === 'strength') {
       if (s.type && TYPE_IDS.includes(s.type)) pd.type = s.type;
       if (s.preset) { const p = Object.values(state.presets).find(p => !p.deleted && norm(p.name) === norm(s.preset)); if (p) pd.type = 'preset:' + p.id; }
       for (const it of s.items || []) {

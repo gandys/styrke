@@ -25,7 +25,7 @@ export function renderBody(root, ctx) {
   const today = ymd();
   const now = Date.now();
   const t = now + ahead * 3600000;
-  const planned = withPlan && ahead > 0 ? futureEvents(state, today, addDays(today, 4)).filter(e => e.t > now - 6 * 3600000 && !(an.days.has(today) && e.t < now + 12 * 3600000 && ymd(new Date(e.t)) === today)) : [];
+  const planned = withPlan && ahead > 0 ? futureEvents(state, today, addDays(today, 4)).filter(e => e.t > now) : [];
   const l = loadAt(an, t, planned);
   const cap = settings.capacity;
   const pain = currentPain(state);
@@ -87,6 +87,10 @@ function muscleSheet(id, ctx) {
     const k = st.date + '|' + st.ex; const o = contrib.get(k) || { date: st.date, ex: ex.name, sets: 0 }; o.sets += st.hard * c; contrib.set(k, o);
   }
   const rows = [...contrib.values()].filter(r => r.sets >= 0.25).sort((a, b) => a.date < b.date ? 1 : -1).slice(0, 8);
+  // what kind of work this muscle got in the last 4 weeks (sets, counted by how heavy they were)
+  const kind = { strength: 0, hyper: 0, endur: 0 };
+  for (const st of an.allSets) { if (st.date < addDays(today, -28) || st.f === 'w') continue; const c = getEx(state, st.ex)?.muscles?.[id]; if (c) kind[st.zone] += c; }
+  const kindTotal = kind.strength + kind.hyper + kind.endur;
   const weeks = [...an.weeks.values()].sort((a, b) => a.week < b.week ? 1 : -1).slice(0, 8).reverse();
   const max = Math.max(tg.hi * 1.2, ...weeks.map(w => w.muscles[id] || 0), 1);
   sheet({
@@ -102,6 +106,11 @@ function muscleSheet(id, ctx) {
           h('div', { style: { position: 'absolute', left: 0, right: 0, bottom: (tg.lo / max * 100) + '%', height: ((tg.hi - tg.lo) / max * 100) + '%', background: 'color-mix(in srgb, var(--good) 16%, transparent)', borderTop: '1px solid var(--good)', borderBottom: '1px solid var(--good)' } }),
           weeks.map(w => h('div', { class: 'grow', title: `${fmtDate(w.week)}: ${fmtNum(w.muscles[id] || 0, 1)} sets`, style: { height: Math.max(2, (w.muscles[id] || 0) / max * 100) + '%', background: 'var(--c1)', borderRadius: '3px 3px 0 0', position: 'relative' } }))),
         h('div', { class: 'row note tiny', style: { justifyContent: 'space-between', marginTop: '4px' } }, h('span', null, fmtDate(weeks[0].week)), h('span', null, 'green band = target'), h('span', null, 'this week'))] : null,
+      kindTotal >= 1 ? [h('div', { class: 'sec' }, 'Kind of work, last 4 weeks'),
+        h('div', { style: { display: 'flex', height: '12px', borderRadius: '6px', overflow: 'hidden', gap: '2px' } },
+          [['strength', 'var(--c3)'], ['hyper', 'var(--c1)'], ['endur', 'var(--c2)']].filter(([k]) => kind[k] > 0).map(([k, c]) => h('div', { style: { width: (kind[k] / kindTotal * 100) + '%', background: c } }))),
+        h('div', { class: 'legend', style: { marginTop: '8px' } },
+          h('span', null, h('i', { style: { background: 'var(--c3)' } }), `Heavy ${fmtNum(kind.strength, 1)}`), h('span', null, h('i', { style: { background: 'var(--c1)' } }), `Moderate ${fmtNum(kind.hyper, 1)}`), h('span', null, h('i', { style: { background: 'var(--c2)' } }), `Light ${fmtNum(kind.endur, 1)}`), h('span', null, 'sets'))] : null,
       h('div', { class: 'sec' }, 'What loaded it lately'),
       rows.length ? h('table', { class: 't' }, h('tbody', null, rows.map(r => h('tr', null, h('td', { class: 'dim', style: { whiteSpace: 'nowrap' } }, relDay(r.date, today)), h('td', null, r.ex), h('td', { class: 'n' }, fmtNum(r.sets, 1) + ' sets')))))
         : h('p', { class: 'note' }, 'Nothing in the last 10 days.'),

@@ -5,11 +5,12 @@ import { state, local, saveLocal, put, del, commit, setSetting, exportJson, expo
 import { analyze, allExercises, getSettings, DEFAULTS, muscleTarget, halfLife, bodyweightAt } from '../model.js';
 import { MUSCLES, JOINTS, MUSCLE } from '../library.js';
 import { importFile, importPlan, examplePlan } from '../importers.js';
-import { syncState, syncNow, syncKind, testGithub, saveFile, shareFile, isAndroid, inArtifact } from '../sync.js';
+import { syncState, syncNow, syncKind, testGithub, cleanRepo, saveFile, shareFile, isAndroid, inArtifact } from '../sync.js';
 import { ymd, norm, fmtDate, weekStart, fmtNum } from '../util.js';
 import { editExercise, editBlock, editPreset, muscleSummary, markMine, exName, blockMinutes, itemLabel } from './common.js';
 import { planMinutes } from '../planner.js';
 
+const VERSION = typeof __VERSION__ !== 'undefined' ? __VERSION__ : 'dev';
 let page = 'menu';
 let libScope = 'mine', libQ = '';
 export function morePage() { return page; }
@@ -34,7 +35,8 @@ function menu(root, ctx, go) {
     item('gear', 'Settings', 'Targets, recovery speed, planner, appearance', 'settings'),
     item('cloud', 'Backup, sync and import', kind === 'github' ? 'Syncing to your GitHub repository' : kind === 'artifact' ? 'Saved in your Claude storage' : 'On this device only. Set up a cloud copy.', 'data'),
     item('book', 'How the numbers work', 'Load, fatigue, weight-adjusted volume, and the evidence', 'science'))));
-  root.appendChild(h('p', { class: 'note tiny', style: { textAlign: 'center', marginTop: '18px' } }, 'Styrke 1.0. Your data stays on your device and in the cloud copy you choose.'));
+  root.appendChild(h('p', { class: 'note tiny', style: { textAlign: 'center', marginTop: '18px' } }, `Styrke ${VERSION}. Your data stays on your device and in the cloud copy you choose. `,
+    inArtifact() ? null : h('a', { href: 'https://github.com/gandys/styrke/releases/latest', target: '_blank', rel: 'noopener', style: { color: 'var(--accent)' } }, 'Check for a newer version')));
 }
 
 // ---------- exercises
@@ -88,7 +90,8 @@ function settings(root, ctx) {
       h('div', { class: 'panel' }, h('h2', null, 'You'),
         row('Body weight, kg', 'Used for pull-ups, push-ups and other bodyweight work.', h('div', { style: { width: '84px' } }, numInput(bodyweightAt(state, today), v => { if (v > 20) { put('body', { date: today, kg: v }, 'settings'); setSetting('bodyweight', v); } }, { style: 'text-align:center', 'aria-label': 'Body weight' }))),
         row('Appearance', null, h('div', { style: { width: '160px' } }, seg([{ id: 'dark', name: 'Dark' }, { id: 'light', name: 'Light' }], s.theme, v => { setSetting('theme', v); document.documentElement.dataset.theme = v; ctx.refresh(); }))),
-        row('Rest timer', 'Starts when you tick a set.', toggle(s.restTimer, v => setSetting('restTimer', v), 'Rest timer'))),
+        row('Rest timer', 'Starts when you tick a set. The phone buzzes when rest is over.', toggle(s.restTimer, v => setSetting('restTimer', v), 'Rest timer')),
+        row('Beep when rest is over', 'Plays through the media volume.', toggle(!!s.restSound, v => setSetting('restSound', v), 'Beep when rest is over'))),
       h('div', { class: 'panel' }, h('h2', null, 'Planner'),
         row('Longest session, minutes', 'Change it for a single day in that day\'s sheet.', n('maxMinutes', { min: 15 })),
         row('Sets per exercise', 'Starting point. The planner adds a set when time allows.', n('setsPerExercise', { min: 1 })),
@@ -138,11 +141,16 @@ function data(root, ctx) {
       field('Access token', h('input', { type: 'password', value: gh.token, placeholder: 'github_pat_…', autocomplete: 'off', onInput: e => { gh.token = e.target.value.trim(); } }), 'Stays on this device. Never included in backups or synced.'),
       h('div', { class: 'row' },
         h('button', { class: 'btn primary grow', onClick: async e => {
+          Object.assign(gh, cleanRepo(gh.owner, gh.repo)); gh.token = gh.token.replace(/\s+/g, '');
           if (!gh.owner || !gh.repo || !gh.token) return toast('Fill in owner, repository and token.');
-          e.target.disabled = true;
-          try { const info = await testGithub(gh); local.github = { ...gh }; saveLocal(); if (!info.private) toast('Connected. Note: that repository is public.'); const r = await syncNow(); toast(r.ok ? 'Connected and synced' : 'Connected, but the first sync failed'); }
-          catch (err) { toast(err.message); }
-          e.target.disabled = false; ctx.refresh();
+          const btn = e.currentTarget; btn.disabled = true; btn.textContent = 'Connecting…';
+          let msg = '';
+          try {
+            const info = await testGithub(gh); local.github = { ...gh }; saveLocal();
+            const r = await syncNow();
+            msg = r.ok ? (info.private ? 'Connected and synced' : 'Connected and synced. Note: that repository is public, so anyone can read your log.') : 'Connected, but the first sync failed: ' + syncState.msg;
+          } catch (err) { msg = err.message; }
+          ctx.refresh(); toast(msg);
         } }, 'Connect and sync'),
         local.github ? h('button', { class: 'btn', onClick: () => { local.github = null; saveLocal(); toast('Cloud sync turned off on this device'); ctx.refresh(); } }, 'Disconnect') : null),
       h('details', null, h('summary', { style: { cursor: 'pointer', color: 'var(--accent)', fontWeight: 500, minHeight: '36px' } }, 'How to set this up (5 minutes, once)'),
@@ -161,6 +169,7 @@ function data(root, ctx) {
         if (replace) { importJson(r.obj, 'merge'); toast('Backup merged'); }
       } else if (r.kind === 'plan') toast(`Added ${r.added} planned sessions on ${r.days} days`);
       else { sheet({ title: 'Import finished', body: [h('p', null, `Imported ${r.sets} sets and ${r.cardio} cardio entries on ${r.days} days (${r.from} to ${r.to}).`), r.skipped ? h('p', { class: 'note' }, `${r.skipped} rows had no reps and were skipped.`) : null,
+        r.keptEdited ? h('p', { class: 'note' }, `${r.keptEdited} days were left alone because you changed them in the app.`) : null,
         r.created.length ? h('div', { class: 'banner', style: { marginTop: '10px' } }, icon('info'), h('div', null, 'These exercises were not recognised and were created without muscles. Open Exercises and set their muscles so they count toward load: ', h('b', null, r.created.join(', ')))) : h('p', { class: 'note' }, 'Every exercise was matched to the library. Check the muscle settings under Exercises if a name was matched loosely.')] }); }
       ctx.refresh();
     } catch (err) { toast(err.message || 'Could not read that file'); }

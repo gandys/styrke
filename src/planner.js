@@ -62,11 +62,17 @@ export function planDayEvent(state, pd) {
   return ev;
 }
 
+/** True once the planned workout for that day has been turned into a logged session. */
+export function planStarted(state, date) {
+  return Object.values(state.sessions || {}).some(s => !s.deleted && s.date === date && s.fromPlan);
+}
+
 /** Future planned days (from `from`, inclusive) as load events, for forecasts. */
 export function futureEvents(state, from, to) {
   const out = [];
   for (const pd of Object.values(state.plan || {})) {
     if (pd.deleted || !pd.on || pd.date < from || (to && pd.date > to)) continue;
+    if (planStarted(state, pd.date)) continue;   // already logged: do not count it twice
     if (pd.items?.length) out.push(planDayEvent(state, pd));
   }
   return out;
@@ -119,7 +125,7 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
   const fixedItems = pd => (pd.items || []).filter(it => it.src !== 'auto');
   const extra = [];
   for (const pd of Object.values(state.plan || {})) {
-    if (pd.deleted || !pd.on || pd.date < today) continue;
+    if (pd.deleted || !pd.on || pd.date < today || planStarted(state, pd.date)) continue;
     const fi = fixedItems(pd);
     const inRange = pd.date >= from && pd.date <= to;
     const items = inRange ? fi : (pd.items || []);
@@ -346,7 +352,7 @@ export function weekProjection(state, an, week, today = ymd()) {
     const day = an.days.get(d);
     if (day) for (const m in day.muscles) sets[m].done += day.muscles[m];
     const pd = state.plan?.[d];
-    if (pd && pd.on && !pd.deleted && d >= today && !(d === today && day)) {
+    if (pd && pd.on && !pd.deleted && d >= today && !planStarted(state, d)) {
       const ev = planDayEvent(state, pd);
       for (const m in ev.sets) if (sets[m]) sets[m].planned += ev.sets[m];
     }

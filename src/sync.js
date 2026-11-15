@@ -27,11 +27,31 @@ function b64dec(b64) {
 
 // ---------- GitHub
 const DATA_FILE = 'styrke-data.json';
-function ghFetch(cfg, path, opts = {}) {
-  return fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/${path}`, {
-    ...opts, cache: 'no-store',
-    headers: { Authorization: `Bearer ${cfg.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(opts.headers || {}) },
-  });
+/** Accepts what people actually paste: "owner" + "repo", "owner/repo", or a full github.com URL. */
+export function cleanRepo(owner, repo) {
+  let o = String(owner || '').trim(), r = String(repo || '').trim();
+  const strip = s => s.replace(/^https?:\/\/(www\.)?github\.com\//i, '').replace(/\.git$/i, '').replace(/^\/+|\/+$/g, '');
+  o = strip(o); r = strip(r);
+  if (r.includes('/')) { const p = r.split('/'); o = p[0]; r = p[1]; }
+  else if (o.includes('/')) { const p = o.split('/'); o = p[0]; r = r || p[1]; }
+  return { owner: o.replace(/^@/, ''), repo: r };
+}
+async function ghFetch(cfg, path, opts = {}) {
+  // No trailing slash, ever: GitHub answers the browser's pre-flight check for ".../repo/" with an
+  // error, and the request then fails as a bare "Failed to fetch".
+  const url = `https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}${path ? '/' + path : ''}`;
+  try {
+    return await fetch(url, {
+      ...opts, cache: 'no-store',
+      headers: { Authorization: `Bearer ${cfg.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(opts.headers || {}) },
+    });
+  } catch (e) {
+    const err = new Error(inArtifact()
+      ? 'This copy runs inside Claude, which blocks connections to GitHub. Use the Android app or the web version for GitHub sync; here your data saves to Claude storage.'
+      : (typeof navigator !== 'undefined' && navigator.onLine === false) ? 'You are offline. Changes are safe on this device and sync when you are back online.'
+      : 'Could not reach GitHub. Check your connection and try again.');
+    err.network = true; throw err;
+  }
 }
 async function ghGet(cfg, file) {
   const r = await ghFetch(cfg, `contents/${file}`);
@@ -62,10 +82,11 @@ async function ghErr(r) {
 }
 
 export async function testGithub(cfg) {
+  if (!/^[\x21-\x7e]+$/.test(cfg.token)) throw new Error('The token contains spaces or unusual characters. Copy it again from GitHub.');
   const r = await ghFetch(cfg, '');
   if (!r.ok) throw new Error(await ghErr(r));
   const j = await r.json();
-  if (!j.permissions?.push) throw new Error('The token can read this repository but not write to it. Give it "Contents: read and write".');
+  if (j.permissions && j.permissions.push === false) throw new Error('The token can read this repository but not write to it. Give it "Contents: read and write".');
   return { private: j.private, name: j.full_name };
 }
 
@@ -171,7 +192,7 @@ export async function syncNow() {
       return { ok: true, imported };
     } catch (e) {
       console.warn('sync failed', e);
-      set('err', (typeof navigator !== 'undefined' && navigator.onLine === false) ? 'Offline. Changes are safe on this device and sync when you are back online.' : (e.message || 'Sync failed'));
+      set('err', e.message || 'Sync failed');
       return { ok: false, error: e };
     } finally { running = null; if (again) { again = false; syncSoon(); } }
   })();

@@ -18,6 +18,7 @@ export const DEFAULTS = {
   setsPerExercise: 3,
   theme: 'dark',
   restTimer: true,
+  restSound: false,
   planBlocksBonus: 1.15,
   targets: {},        // per-muscle overrides {id: {lo, hi}}
   halfLife: {},       // per-muscle / joint overrides in hours
@@ -88,7 +89,7 @@ export function hardnessFromRir(rir) {
 export function sessionTime(s) {
   if (s.start) return s.start;
   const d = parseYmd(s.date); d.setHours(18, 0, 0, 0);
-  return d.getTime();
+  return Math.min(d.getTime(), Date.now());   // never in the future: work logged today counts now
 }
 
 /** All performed work in a session as flat records. */

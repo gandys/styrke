@@ -6,7 +6,8 @@ import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from
 
 const root = new URL('.', import.meta.url).pathname;
 const r = p => readFileSync(root + p, 'utf8');
-const out = await build({ entryPoints: [root + 'src/main.js'], bundle: true, minify: true, format: 'iife', target: ['chrome90', 'safari14'], write: false, legalComments: 'none' });
+const version = (process.env.STYRKE_VERSION || JSON.parse(r('package.json')).version) + ' (' + new Date().toISOString().slice(0, 10) + ')';
+const out = await build({ entryPoints: [root + 'src/main.js'], bundle: true, minify: true, define: { __VERSION__: JSON.stringify(version) }, format: 'iife', target: ['chrome90', 'safari14'], write: false, legalComments: 'none' });
 const js = out.outputFiles[0].text.replace(/<\/script/gi, '<\\/script');
 
 const fonts = [

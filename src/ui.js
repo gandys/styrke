@@ -124,7 +124,8 @@ export function toast(msg, action) {
   clearTimeout(toastT);
   toastEl = h('div', { class: 'toast', role: 'status' }, h('span', null, msg), action ? h('button', { onClick: () => { action.fn(); toastEl?.remove(); } }, action.label) : null);
   document.body.appendChild(toastEl);
-  toastT = setTimeout(() => { toastEl?.remove(); toastEl = null; }, action ? 6000 : 2600);
+  // long messages (errors) stay long enough to read
+  toastT = setTimeout(() => { toastEl?.remove(); toastEl = null; }, action ? 6000 : Math.min(9000, Math.max(2600, String(msg).length * 70)));
 }
 
 export function field(label, input, hint) {

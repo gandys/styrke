@@ -1,7 +1,7 @@
 // Today: the gym screen. Log sets in a table, tick them off, rest timer, autosave on every keystroke.
 
-import { h, icon, iconBtn, sheet, toast, confirmSheet, numInput, field } from '../ui.js';
-import { state, commit, touch, put, sessionsOn, newSession, flush } from '../store.js';
+import { h, icon, iconBtn, sheet, toast, confirmSheet, numInput, field, closeAllSheets } from '../ui.js';
+import { state, commit, touch, put, del, sessionsOn, newSession, flush } from '../store.js';
 import { analyze, getEx, suggest, loadAt, currentPain, statusOf, sessionSummary, getSettings } from '../model.js';
 import { planMinutes, painCheck } from '../planner.js';
 import { MUSCLE, JOINT, TYPE } from '../library.js';
@@ -16,8 +16,21 @@ export function getDate() { return curDate; }
 
 // ---------- rest timer (survives re-renders)
 const timer = { end: 0, total: 0, label: '', iv: 0, buzzed: false };
+let actx = null;
+function beep() {
+  try {
+    if (!actx) return;
+    const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+    o.frequency.value = 880; o.connect(g); g.connect(actx.destination);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+    o.start(t); o.stop(t + 0.5);
+  } catch { /* no audio */ }
+}
 function startTimer(sec, label) {
-  if (!getSettings(state).restTimer || !sec) return;
+  const st = getSettings(state);
+  if (!st.restTimer || !sec) return;
+  // audio may only start from a tap, so get it ready now for the beep later
+  if (st.restSound) { try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume && actx.resume(); } catch { actx = null; } } else actx = null;
   timer.end = Date.now() + sec * 1000; timer.total = sec; timer.label = label; timer.buzzed = false;
   drawTimer();
   clearInterval(timer.iv); timer.iv = setInterval(drawTimer, 250);
@@ -28,7 +41,7 @@ function drawTimer() {
   if (!timer.end) { host.replaceChildren(); return; }
   const left = (timer.end - Date.now()) / 1000;
   if (left < -90) { stopTimer(); return; }
-  if (left <= 0 && !timer.buzzed) { timer.buzzed = true; try { navigator.vibrate && navigator.vibrate([180, 90, 180]); } catch { /* not supported */ } }
+  if (left <= 0 && !timer.buzzed) { timer.buzzed = true; try { navigator.vibrate && navigator.vibrate([180, 90, 180]); } catch { /* not supported */ } beep(); }
   const over = left <= 0;
   host.replaceChildren(h('div', { class: 'timer' + (over ? ' over' : '') },
     h('span', { class: 't' }, over ? '+' + fmtDur(-left) : fmtDur(left)),
@@ -56,12 +69,16 @@ function makeBlockItem(an, b, rounds, date) {
     rounds: Array.from({ length: n }, () => b.exIds.map(id => ({ ...lastW(id), r: null, d: false }))) };
 }
 function activeSession(date, create) {
-  const list = sessionsOn(date);
+  // new work never goes into a session that came from an import, so re-importing cannot overwrite it
+  const list = sessionsOn(date).filter(x => !x.imported);
   let s = list[list.length - 1];
   if (!s && create) s = newSession(date);
   return s;
 }
-function save(s, reason = 'log') { touch(s); commit(reason); }
+function save(s, reason = 'log') {
+  if (s.imported) { s.imported = false; s.edited = true; }   // an imported day you changed is now yours
+  touch(s); commit(reason);
+}
 
 function startFromPlan(pd, an) {
   const s = activeSession(pd.date, true);
@@ -157,7 +174,7 @@ export function renderToday(root, ctx) {
       if (prs.length) root.appendChild(h('div', { class: 'chips', style: { marginTop: '10px' } }, [...new Map(prs.map(p => [p.ex, p])).values()].map(p => h('span', { class: 'tag good', style: { height: '26px' } }, `Best yet: ${exName(p.ex)} ${fmtW(p.top.w)} × ${p.top.r}`))));
     }
     if (!future) root.appendChild(h('div', { class: 'row', style: { marginTop: '12px' } },
-      h('button', { class: 'btn grow', onClick: () => finishSheet(s, ctx) }, s.end ? 'Session notes and effort' : 'Finish workout'),
+      h('button', { class: 'btn grow', onClick: () => finishSheet(s, ctx) }, s.end || s.imported || curDate !== today ? 'Workout details, notes and effort' : 'Finish workout'),
       s.end ? h('span', { class: 'tag good' }, 'Finished') : null));
   }
 
@@ -290,7 +307,7 @@ function finishSheet(s, ctx) {
   const sm = sessionSummary(state, an, s);
   const muscles = Object.entries(sm.muscles).filter(([m, v]) => v >= 0.5 && MUSCLE[m]).sort((a, b) => b[1] - a[1]);
   sheet({
-    title: s.end ? 'Session' : 'Finish workout',
+    title: s.end || s.imported || s.date !== ymd() ? 'Workout details' : 'Finish workout',
     body: [
       h('div', { class: 'tiles' },
         h('div', { class: 'tile', style: { background: 'var(--raised)' } }, h('div', { class: 'v' }, fmtNum(sm.hard, 1)), h('div', { class: 'k' }, 'Hard sets')),
@@ -300,7 +317,37 @@ function finishSheet(s, ctx) {
       h('div', { class: 'stack', style: { marginTop: '14px' } },
         field('How hard was the whole session? (1 easy, 10 maximal)', h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: '4px' } }, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => h('button', { class: 'chip sm' + (s.rpe === n ? ' on' : ''), style: { padding: 0, justifyContent: 'center', minHeight: '36px' }, onClick: e => { s.rpe = s.rpe === n ? undefined : n; save(s); e.target.parentNode.querySelectorAll('.chip').forEach((c, i) => c.classList.toggle('on', s.rpe === i + 1)); } }, n)))),
         field('Notes', h('textarea', { placeholder: 'Anything worth remembering', onInput: e => { s.note = e.target.value; save(s); } }, s.note || ''))),
+      s.start && s.end ? h('p', { class: 'note', style: { marginTop: '10px' } }, `Time in the gym: ${fmtMin((s.end - s.start) / 60000)}.`) : null,
+      h('div', { class: 'row', style: { marginTop: '14px' } },
+        s.items.some(i => i.k !== 'cardio') ? h('button', { class: 'btn small grow', onClick: () => saveAsPreset(s) }, icon('copy'), 'Save as a preset') : null,
+        h('button', { class: 'btn small grow danger', onClick: async () => {
+          if (!(await confirmSheet('Delete this workout?', `Everything logged in this workout on ${fmtDate(s.date)} is removed.`, 'Delete', true))) return;
+          const copy = JSON.parse(JSON.stringify(s));
+          del('sessions', s.id, 'log'); closeAllSheets(); ctx.refresh();
+          toast('Workout deleted', { label: 'Undo', fn: () => { put('sessions', copy, 'log'); ctx.refresh(); } });
+        } }, icon('trash'), 'Delete workout')),
     ],
-    footer: api => [h('button', { class: 'btn primary', onClick: () => { if (!s.end) { s.end = Date.now(); save(s); flush(); toast('Workout saved'); } api.close(); ctx.refresh(); ctx.syncNow && ctx.syncNow(); } }, s.end ? 'Done' : 'Finish and save')],
+    footer: api => { const open = !s.end && !s.imported && s.date === ymd();
+      return [h('button', { class: 'btn primary', onClick: () => { if (open) { s.end = Date.now(); save(s); toast('Workout saved'); } flush(); api.close(); ctx.refresh(); ctx.syncNow && ctx.syncNow(); } }, open ? 'Finish and save' : 'Done')]; },
+  });
+}
+
+/** Turn what was done in a session into a reusable workout preset. */
+function saveAsPreset(s) {
+  let name = '';
+  const items = [];
+  for (const it of s.items) {
+    if (it.k === 'ex') { const n = it.sets.filter(x => x.f !== 'w').length; if (n) items.push({ k: 'ex', ex: it.ex, sets: n }); }
+    else if (it.k === 'block' && it.block && state.blocks[it.block] && !state.blocks[it.block].deleted) items.push({ k: 'block', block: it.block, rounds: it.rounds.length });
+    else if (it.k === 'block') for (const id of it.exIds) items.push({ k: 'ex', ex: id, sets: it.rounds.length });
+  }
+  sheet({
+    title: 'Save as a preset',
+    body: [field('Name', h('input', { type: 'text', placeholder: 'e.g. Upper A', onInput: e => { name = e.target.value; } })),
+      h('p', { class: 'note', style: { marginTop: '10px' } }, `${items.length} exercises and blocks, with the number of sets you did. Pick it as the type of any planned day, or let the planner hand it out.`)],
+    footer: api => [h('button', { class: 'btn', onClick: () => api.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => {
+      if (!name.trim()) return toast('Give the preset a name.');
+      put('presets', { id: uid('p'), name: name.trim(), items, plan: true }, 'library'); api.close(); toast('Preset saved');
+    } }, 'Save preset')],
   });
 }

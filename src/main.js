@@ -46,6 +46,7 @@ function render(resetScroll) {
   const t = TABS.find(x => x.id === tab) || TABS[0];
   try { t.render(els.main, ctx); }
   catch (e) { console.error(e); els.main.appendChild(h('div', { class: 'empty' }, h('b', null, 'Something went wrong on this screen'), String(e.message || e), h('div', { style: { marginTop: '12px' } }, 'Your data is safe. Try another tab, or reload.'))); }
+  els.main.dataset.tab = tab;
   els.main.classList.toggle('narrow', tab === 'today' || (tab === 'more' && !['settings', 'data'].includes(morePage())));
   if (tab === 'today') welcome();
   for (const b of els.nav.children) { const on = b.dataset.tab === tab; b.classList.toggle('on', on); b.setAttribute('aria-current', on ? 'page' : 'false'); }
@@ -77,7 +78,7 @@ function drawSync() {
 
 let wake = null;
 async function keepAwake() {
-  const s = tab === 'today' ? sessionsOn(ymd()).find(x => x.items?.length && !x.end) : null;
+  const s = tab === 'today' ? sessionsOn(ymd()).find(x => x.items?.length && !x.end && !x.imported && Date.now() - (x.u || 0) < 45 * 60000) : null;
   try {
     if (isAndroid() && window.Android.keepAwake) { window.Android.keepAwake(!!s); return; }
     if (s && !wake && navigator.wakeLock) { wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); }
@@ -129,7 +130,8 @@ async function boot() {
   let maxH = 0, lastW = 0;
   const vv = window.visualViewport;
   const checkKeyboard = () => {
-    const hgt = vv ? vv.height : window.innerHeight, wid = vv ? vv.width : window.innerWidth;
+    // multiply by scale so pinch-zoom is not mistaken for a keyboard
+    const hgt = vv ? vv.height * (vv.scale || 1) : window.innerHeight, wid = vv ? vv.width * (vv.scale || 1) : window.innerWidth;
     if (Math.abs(wid - lastW) > 40) { maxH = 0; lastW = wid; }
     maxH = Math.max(maxH, hgt);
     document.body.classList.toggle('typing', hgt < maxH * 0.78);

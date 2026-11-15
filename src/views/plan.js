@@ -3,11 +3,11 @@
 
 import { h, icon, iconBtn, sheet, toast, confirmSheet, seg, field, numInput, toggle } from '../ui.js';
 import { state, put, del, commit, touch, setSetting, sessionsOn } from '../store.js';
-import { analyze, getSettings, muscleTarget, isDeloadWeek } from '../model.js';
+import { analyze, getSettings, muscleTarget, isDeloadWeek, myExercises } from '../model.js';
 import { autoPlan, planMinutes, weekProjection } from '../planner.js';
 import { MUSCLES, TYPES, TYPE } from '../library.js';
 import { ymd, addDays, parseYmd, weekStart, MONTHS, DOW_SHORT, fmtDate, relDay, diffDays, fmtMin, fmtNum, uid } from '../util.js';
-import { pickExercise, pickBlock, itemLabel, exName } from './common.js';
+import { pickExercise, pickBlock, itemLabel, exName, muscleSummary, editBlock } from './common.js';
 
 const HORIZON = 92; // days ahead you can commit to
 let curMonth = null;
@@ -126,6 +126,9 @@ export function renderPlan(root, ctx) {
     h('div', { class: 'stack' },
       seg([{ id: 7, name: 'This week' }, { id: 14, name: 'Next 14 days' }, { id: 28, name: '4 weeks' }, { id: HORIZON, name: 'All' }], range, v => { range = v; ctx.refresh(); }),
       presets.length ? seg([{ id: 'exercises', name: 'Build from my exercises' }, { id: 'presets', name: 'Hand out my presets' }], settings.planMode || 'exercises', v => setSetting('planMode', v)) : null,
+      (() => { const pool = myExercises(state).filter(e => e.kind === 'strength'); const on = pool.filter(e => e.plan !== false).length; const bl = Object.values(state.blocks).filter(b => !b.deleted && b.plan !== false).length;
+        return h('button', { class: 'row', style: { width: '100%', textAlign: 'left', minHeight: '44px' }, onClick: () => poolSheet(ctx) },
+          h('span', { class: 'grow' }, 'What the planner may use', h('div', { class: 'note tiny' }, `${on} of ${pool.length} exercises, ${bl} ${bl === 1 ? 'block' : 'blocks'}`)), h('span', { class: 'tag acc' }, 'Choose'), icon('right', 16)); })(),
       h('div', { class: 'row' }, h('span', { class: 'grow' }, 'Longest session'), h('div', { style: { width: '92px' } }, numInput(settings.maxMinutes, v => { if (v >= 15) setSetting('maxMinutes', v); }, { int: true, 'aria-label': 'Longest session in minutes', style: 'text-align:center' })), h('span', { class: 'dim' }, 'min')),
       h('button', { class: 'btn primary block', disabled: !inRange.length, onClick: () => {
         const n = runAutoPlan(today, to);
@@ -222,5 +225,36 @@ export function openDaySheet(date, ctx) {
       h('button', { class: 'btn danger', onClick: () => { del('plan', date, 'plan'); api.close(); toast('Day removed from your plan'); } }, 'Remove day'),
       date <= today ? h('button', { class: 'btn primary', onClick: () => { api.close(); ctx.openDate(date); } }, 'Open in Today') : h('button', { class: 'btn primary', onClick: () => api.close() }, 'Done'),
     ],
+  });
+}
+
+// ---------- the pool of exercises and blocks the planner draws from
+function poolSheet(ctx) {
+  const setFlag = (id, v) => { const u = state.ex[id] || { id }; u.plan = v; put('ex', u, 'library'); };
+  sheet({
+    title: 'What the planner may use',
+    onClose: () => ctx.refresh(),
+    body: api => {
+      const pool = myExercises(state).filter(e => e.kind === 'strength').sort((a, b) => a.name.localeCompare(b.name));
+      const blocks = Object.values(state.blocks).filter(b => !b.deleted);
+      return [
+        h('p', { class: 'note', style: { marginBottom: '6px' } }, 'The planner only picks from what is switched on here. Exercises you leave off can still be logged and added by hand.'),
+        h('div', { class: 'row', style: { margin: '8px 0' } },
+          h('button', { class: 'btn small grow', onClick: () => { pool.forEach(e => { if (e.plan === false) setFlag(e.id, true); }); api.render(); } }, 'All on'),
+          h('button', { class: 'btn small grow', onClick: () => pickExercise({ kind: 'strength', title: 'Add to my exercises', exclude: pool.map(e => e.id), onPick: () => api.render() }) }, icon('plus'), 'Add exercise')),
+        h('div', { class: 'sec', style: { marginTop: '12px' } }, 'Exercises'),
+        pool.length ? h('div', { class: 'list' }, pool.map(e => h('div', null,
+          h('span', { class: 'grow' }, h('div', { class: 't' }, e.name, e.needsSetup ? h('span', { class: 'tag warn', style: { marginLeft: '8px' } }, 'set muscles') : null), h('div', { class: 's ell' }, muscleSummary(e))),
+          toggle(e.plan !== false, v => setFlag(e.id, v), `Planner may use ${e.name}`))))
+          : h('p', { class: 'note' }, 'Your exercise list is empty. Add the exercises you do first.'),
+        h('div', { class: 'sec' }, 'Blocks'),
+        blocks.length ? h('div', { class: 'list' }, blocks.map(b => h('div', null,
+          h('span', { class: 'grow' }, h('div', { class: 't' }, b.name), h('div', { class: 's ell' }, b.exIds.map(exName).join(', '))),
+          toggle(b.plan !== false, v => { b.plan = v; put('blocks', b, 'library'); }, `Planner may use ${b.name}`))))
+          : h('p', { class: 'note' }, 'No blocks yet.'),
+        h('button', { class: 'btn small block', style: { marginTop: '10px' }, onClick: () => editBlock(null, () => api.render()) }, icon('plus'), 'New block'),
+      ];
+    },
+    footer: api => [h('button', { class: 'btn primary', onClick: () => api.close() }, 'Done')],
   });
 }

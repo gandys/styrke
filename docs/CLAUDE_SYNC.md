@@ -28,7 +28,7 @@ This file describes the format so that Claude (or any tool) can produce it.
 | `source` | A short label for where the plan comes from. Shown as a tag on each imported item. |
 | `replace` | Optional. Before importing, removes earlier imported items **from the same source** in this date range. Use it when re-sending an updated plan so sessions are not doubled. Items the user added by hand are never touched. |
 | `sessions[].date` | `YYYY-MM-DD`. The day becomes a committed day in the calendar. |
-| `sessions[].kind` | `run`, `treadmill`, `bike`, `hike`, `swim`, `walk`, `ski`, `row`, `climb`, `cardio`, `strength` or `rest`. |
+| `sessions[].kind` | `run`, `treadmill`, `bike`, `hike`, `swim`, `walk`, `ski`, `row`, `climb`, `cardio` or `strength`. `rest` is accepted and ignored: a rest day is simply a day that is not committed. |
 | cardio fields | `name` (label), `minutes`, `km`, `effort` (1-10, default 4), `note`. For other activities add `"activity": "Name"`; it is matched to the exercise library or created. |
 | strength fields | `type`: `auto`, `upper`, `lower`, `full`, `push`, `pull`, `legs`, `arms`, `core` or `custom`. `preset`: name of one of the user's presets. `items`: fixed exercises (`exercise` name, `sets`, `reps` as `"8-12"` or a number, `note`). Without `items`, the app's planner fills the day according to `type`. |
 
