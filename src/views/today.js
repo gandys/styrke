@@ -182,7 +182,7 @@ function setRow(s, set, i, opts) {
   const { onDone, label, block, weightChanged } = opts;
   const row = h('div', { class: 'set' + (block ? ' bset' : '') + (set.d ? ' done' : '') });
   const repsEl = numInput(set.r, v => { set.r = v; save(s); }, { int: true, placeholder: set.ph != null ? String(set.ph) : 'reps', 'aria-label': 'Reps' });
-  const wEl = numInput(set.w, (v, el) => { set.w = v; save(s); weightChanged && weightChanged(v, el); }, { placeholder: 'kg', 'aria-label': 'Weight in kg' });
+  const wEl = numInput(set.w, (v, el) => { set.w = v; save(s); weightChanged && weightChanged(v, el); }, { placeholder: opts.wph || 'kg', 'aria-label': 'Weight in kg' });
   const okBtn = h('button', { class: 'ok', 'aria-label': set.d ? 'Mark set as not done' : 'Mark set as done', 'aria-pressed': String(!!set.d), onClick: () => {
     if (!set.d) {
       if (set.r == null) set.r = set.ph ?? opts.prev?.r ?? null;
@@ -203,19 +203,20 @@ function renderItem(s, it, idx, an, ctx) {
   if (it.k === 'ex') {
     const ex = getEx(state, it.ex);
     const sg = suggest(state, an, it.ex, s.date);
+    const wl = w => (ex?.bw && !w ? 'BW' : fmtW(w));
     const last = sg?.last;
     card.appendChild(h('div', { class: 'xhead' },
       h('button', { class: 'grow', style: { textAlign: 'left' }, onClick: () => showExerciseHistory(it.ex) },
         h('div', { class: 'name' }, ex?.name || 'Unknown exercise', it.easy ? h('span', { class: 'tag pain', style: { marginLeft: '8px' } }, 'go easy') : null, ex?.needsSetup ? h('span', { class: 'tag warn', style: { marginLeft: '8px' } }, 'set muscles') : null),
-        last ? h('div', { class: 'meta' }, 'Last ', h('b', null, last.sets.filter(x => x.f !== 'w').slice(0, 5).map(x => `${fmtW(x.w)}×${x.r}`).join('  ')), sg.target ? [h('span', null, '   Aim '), h('b', { style: { color: 'var(--accent)' } }, `${fmtW(sg.target.w)}×${sg.target.r}`)] : null)
+        last ? h('div', { class: 'meta' }, 'Last ', h('b', null, last.sets.filter(x => x.f !== 'w').slice(0, 5).map(x => `${wl(x.w)}×${x.r}`).join('  ')), sg.target ? [h('span', null, '   Aim '), h('b', { style: { color: 'var(--accent)' } }, `${wl(sg.target.w)}×${sg.target.r}`)] : null)
           : h('div', { class: 'meta' }, 'First time. ', ex ? `Aim for ${ex.repLo}–${ex.repHi} reps.` : '')),
       iconBtn('dots', 'More options', menu)));
     const sets = h('div', { class: 'sets' });
-    if (idx === 0 && it.sets.length) card.appendChild(h('div', { class: 'sethead' }, h('span'), h('span', null, 'kg'), h('span'), h('span', null, 'reps'), h('span', null, 'done')));
+    if (idx === 0 && it.sets.length) card.appendChild(h('div', { class: 'sethead' }, h('span'), h('span', null, ex?.bw ? 'added kg' : ex?.perSide ? 'kg per hand' : 'kg'), h('span'), h('span', null, 'reps'), h('span', null, 'done')));
     let n = 0;
     it.sets.forEach((set, i) => {
       const num = set.f === 'w' ? null : ++n;
-      sets.appendChild(setRow(s, set, i, { num, prev: it.sets[i - 1], rerender: () => ctx.refresh(),
+      sets.appendChild(setRow(s, set, i, { num, prev: it.sets[i - 1], rerender: () => ctx.refresh(), wph: ex?.bw ? '+ kg' : 'kg',
         onDone: on => { if (on) startTimer(ex?.rest || 90, i < it.sets.length - 1 ? 'set ' + (i + 2) : ''); ctx.refresh(); } }));
     });
     card.appendChild(sets);

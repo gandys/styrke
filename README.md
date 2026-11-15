@@ -20,7 +20,7 @@ How the numbers are calculated is explained in the app under *More > How the num
 ## Install on Android
 
 1. On the phone, open **Releases** on this repository and download `Styrke.apk` from the newest one
-   (direct link: `https://github.com/<owner>/<repo>/releases/latest/download/Styrke.apk`).
+   (direct link: https://github.com/gandys/styrke/releases/latest/download/Styrke.apk).
 2. Open the file. Android asks once to allow installing from your browser; allow it.
 3. Later versions install over the old one and keep your data.
 
@@ -29,7 +29,7 @@ Every push to `main` builds a new APK automatically (`.github/workflows/build.ym
 ### Web version
 
 Turn on GitHub Pages once: *Settings > Pages > Source: GitHub Actions*. The workflow then publishes the app at
-`https://<owner>.github.io/<repo>/`. In Chrome choose *Install app* / *Add to Home screen*.
+https://gandys.github.io/styrke/. In Chrome choose *Install app* / *Add to Home screen*.
 
 ## Keeping your data safe
 
