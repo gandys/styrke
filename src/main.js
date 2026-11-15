@@ -29,6 +29,7 @@ const ctx = {
   go(t, sub) { if (t === 'more' && sub) setMorePage(sub); else if (t === 'more') setMorePage('menu'); tab = t; setHash(); render(true); },
   openDate(d) { setDate(d); tab = 'today'; setHash(); render(true); },
   syncSoon,
+  syncNow() { if (syncKind()) syncNow(); },
   replanSoon() {
     const today = ymd();
     const has = Object.values(state.plan).some(p => !p.deleted && p.on && p.date >= today && p.date <= addDays(today, 7) && p.auto);
@@ -123,11 +124,19 @@ async function boot() {
     else { if (syncKind() && Date.now() - syncState.last > 5 * 60000) syncNow(); keepAwake(); }
   });
   window.addEventListener('online', () => { if (syncKind()) syncNow(); });
-  // On a phone, give the keyboard room: hide the tab bar and add-buttons while typing.
-  const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-  const isText = el => el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(range|date|file|checkbox|radio)$/.test(el.type)));
-  document.addEventListener('focusin', e => { if (coarse && isText(e.target)) document.body.classList.add('typing'); });
-  document.addEventListener('focusout', () => { setTimeout(() => { if (!isText(document.activeElement)) document.body.classList.remove('typing'); }, 120); });
+  // Give the on-screen keyboard room: while it is up (the visible area shrinks), hide the tab bar
+  // and add-buttons. Based on the viewport, not on focus, so closing the keyboard brings them back.
+  let maxH = 0, lastW = 0;
+  const vv = window.visualViewport;
+  const checkKeyboard = () => {
+    const hgt = vv ? vv.height : window.innerHeight, wid = vv ? vv.width : window.innerWidth;
+    if (Math.abs(wid - lastW) > 40) { maxH = 0; lastW = wid; }
+    maxH = Math.max(maxH, hgt);
+    document.body.classList.toggle('typing', hgt < maxH * 0.78);
+  };
+  (vv || window).addEventListener('resize', checkKeyboard);
+  window.addEventListener('resize', checkKeyboard);
+  checkKeyboard();
   if (syncKind()) syncNow();
   dailyFileBackup();
   if ('serviceWorker' in navigator && location.protocol === 'https:' && !inArtifact() && document.querySelector('link[rel=manifest]')) { try { navigator.serviceWorker.register('sw.js'); } catch { /* ignore */ } }

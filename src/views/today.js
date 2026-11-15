@@ -300,6 +300,6 @@ function finishSheet(s, ctx) {
         field('How hard was the whole session? (1 easy, 10 maximal)', h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(10, 1fr)', gap: '4px' } }, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => h('button', { class: 'chip sm' + (s.rpe === n ? ' on' : ''), style: { padding: 0, justifyContent: 'center', minHeight: '36px' }, onClick: e => { s.rpe = s.rpe === n ? undefined : n; save(s); e.target.parentNode.querySelectorAll('.chip').forEach((c, i) => c.classList.toggle('on', s.rpe === i + 1)); } }, n)))),
         field('Notes', h('textarea', { placeholder: 'Anything worth remembering', onInput: e => { s.note = e.target.value; save(s); } }, s.note || ''))),
     ],
-    footer: api => [h('button', { class: 'btn primary', onClick: () => { if (!s.end) { s.end = Date.now(); save(s); flush(); toast('Workout saved'); } api.close(); ctx.refresh(); ctx.syncSoon && ctx.syncSoon(); } }, s.end ? 'Done' : 'Finish and save')],
+    footer: api => [h('button', { class: 'btn primary', onClick: () => { if (!s.end) { s.end = Date.now(); save(s); flush(); toast('Workout saved'); } api.close(); ctx.refresh(); ctx.syncNow && ctx.syncNow(); } }, s.end ? 'Done' : 'Finish and save')],
   });
 }

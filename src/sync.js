@@ -177,7 +177,9 @@ export async function syncNow() {
   })();
   return running;
 }
-export const syncSoon = debounce(() => { if (syncKind()) syncNow(); }, 15000);
+// Sync after two quiet minutes (and whenever the app goes to the background or a workout is finished),
+// so a workout does not turn into dozens of uploads.
+export const syncSoon = debounce(() => { if (syncKind()) syncNow(); }, 120000);
 
 // ---------- files
 export async function saveFile(name, text, mime = 'application/json') {
