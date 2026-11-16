@@ -3,12 +3,12 @@
 import { h, icon, iconBtn, sheet, toast, confirmSheet, numInput, field, closeAllSheets } from '../ui.js';
 import { state, commit, touch, put, del, sessionsOn, newSession, flush } from '../store.js';
 import { analyze, getEx, suggest, loadAt, currentPain, statusOf, sessionSummary, getSettings } from '../model.js';
-import { planMinutes, painCheck } from '../planner.js';
+import { planMinutes, painCheck, presetItems } from '../planner.js';
 import { MUSCLE, JOINT, TYPE } from '../library.js';
 import { ymd, addDays, relDay, fmtDate, fmtW, fmtNum, fmtDur, uid, diffDays, fmtMin } from '../util.js';
-import { pickExercise, pickBlock, exName, itemLabel, editExercise, muscleSummary } from './common.js';
+import { pickExercise, pickBlock, pickPreset, exName, itemLabel, editExercise, muscleSummary } from './common.js';
 import { showExerciseHistory } from './insights.js';
-import { openDaySheet, planDayNow } from './plan.js';
+import { openDaySheet, planDayNow, typeName as planTypeName } from './plan.js';
 
 let curDate = ymd();
 export function setDate(d) { curDate = d; }
@@ -80,13 +80,17 @@ function save(s, reason = 'log') {
   touch(s); commit(reason);
 }
 
-function startFromPlan(pd, an) {
-  const s = activeSession(pd.date, true);
-  for (const it of pd.items || []) {
-    if (it.k === 'ex') { const item = makeExItem(an, it.ex, it.sets, pd.date); if (it.note) item.note = it.note; if (it.easy) item.easy = true; s.items.push(item); }
-    else if (it.k === 'block') { const b = state.blocks[it.block]; if (b && !b.deleted) s.items.push(makeBlockItem(an, b, it.rounds, pd.date)); }
+/** Turn planned items (from a planned day or a preset) into loggable rows in a session. */
+function addPlanned(s, items, an, date) {
+  for (const it of items || []) {
+    if (it.k === 'ex') { const item = makeExItem(an, it.ex, it.sets, date); if (it.note) item.note = it.note; if (it.easy) item.easy = true; s.items.push(item); }
+    else if (it.k === 'block') { const b = state.blocks[it.block]; if (b && !b.deleted) s.items.push(makeBlockItem(an, b, it.rounds, date)); }
     else if (it.k === 'cardio') s.items.push({ id: uid('i'), k: 'cardio', ex: it.ex, name: it.name, min: it.min ?? null, km: it.km ?? null, rpe: it.rpe || 4, note: it.note || '', d: false, planned: true });
   }
+}
+function startFromPlan(pd, an) {
+  const s = activeSession(pd.date, true);
+  addPlanned(s, pd.items, an, pd.date);
   s.fromPlan = true;
   save(s);
 }
@@ -129,7 +133,7 @@ export function renderToday(root, ctx) {
   const planPending = pd && !sessions.some(s => s.fromPlan);
   if (pd && planPending) {
     const items = pd.items || [];
-    const typeName = pd.type?.startsWith('preset:') ? (state.presets[pd.type.slice(7)]?.name || 'Preset') : (TYPE[pd.type || 'auto']?.name || 'Workout');
+    const typeName = planTypeName(pd);
     const warns = [];
     for (const it of items) {
       const ex = it.k !== 'block' ? getEx(state, it.ex) : null;
@@ -137,7 +141,7 @@ export function renderToday(root, ctx) {
       if (pc) warns.push(`${JOINT[pc.region].name} at ${pc.pain}/10: ${pc.level === 'avoid' ? 'think about moving or swapping' : 'go easy on'} ${it.name || ex.name}.`);
     }
     root.appendChild(h('div', { class: 'panel' },
-      h('h2', null, 'Planned: ' + (pd.type === 'auto' || !pd.type ? 'workout' : typeName), h('span', { class: 'note', style: { fontWeight: 400 } }, items.length ? 'about ' + fmtMin(planMinutes(state, items)) : ''),
+      h('h2', { style: { flexWrap: 'wrap' } }, 'Planned: ' + (typeName === 'Auto' || typeName === 'Custom' ? 'workout' : typeName), h('span', { class: 'note', style: { fontWeight: 400 } }, items.length ? 'about ' + fmtMin(planMinutes(state, items)) : ''),
         h('button', { class: 'more', onClick: () => openDaySheet(curDate, ctx) }, 'Change')),
       warns.length ? h('div', { class: 'banner pain', style: { margin: '0 0 8px' } }, icon('warn'), h('div', null, [...new Set(warns)].map(w => h('div', null, w)))) : null,
       pd.note ? h('p', { class: 'note', style: { marginBottom: '6px' } }, pd.note) : null,
@@ -187,6 +191,7 @@ export function renderToday(root, ctx) {
       h('div', { class: 'addbar' },
         h('button', { class: 'btn primary', onClick: addEx }, icon('plus'), 'Exercise'),
         h('button', { class: 'btn', onClick: addBlock }, 'Block'),
+        Object.values(state.presets).some(p => !p.deleted) ? h('button', { class: 'btn', onClick: () => pickPreset(p => { const s = activeSession(curDate, true); const n0 = s.items.length; addPlanned(s, presetItems(state, p), an, curDate); save(s); ctx.refresh(); if (s.items.length > n0) toast(`${p.name} added`); }) }, 'Preset') : null,
         h('button', { class: 'btn', onClick: addCardio }, 'Cardio')))));
     drawTimer();
   }
@@ -229,7 +234,7 @@ function renderItem(s, it, idx, an, ctx) {
           : h('div', { class: 'meta' }, 'First time. ', ex ? `Aim for ${ex.repLo}–${ex.repHi} reps.` : '')),
       iconBtn('dots', 'More options', menu)));
     const sets = h('div', { class: 'sets' });
-    if (idx === 0 && it.sets.length) card.appendChild(h('div', { class: 'sethead' }, h('span'), h('span', null, ex?.bw ? 'added kg' : ex?.perSide ? 'kg per hand' : 'kg'), h('span'), h('span', null, 'reps'), h('span', null, 'done')));
+    if (idx === s.items.findIndex(x => x.k === 'ex') && it.sets.length) card.appendChild(h('div', { class: 'sethead' }, h('span'), h('span', null, ex?.bw ? 'added kg' : ex?.perSide ? 'kg per hand' : 'kg'), h('span'), h('span', null, 'reps'), h('span', null, 'done')));
     let n = 0;
     it.sets.forEach((set, i) => {
       const num = set.f === 'w' ? null : ++n;
@@ -319,7 +324,7 @@ function finishSheet(s, ctx) {
         field('Notes', h('textarea', { placeholder: 'Anything worth remembering', onInput: e => { s.note = e.target.value; save(s); } }, s.note || ''))),
       s.start && s.end ? h('p', { class: 'note', style: { marginTop: '10px' } }, `Time in the gym: ${fmtMin((s.end - s.start) / 60000)}.`) : null,
       h('div', { class: 'row', style: { marginTop: '14px' } },
-        s.items.some(i => i.k !== 'cardio') ? h('button', { class: 'btn small grow', onClick: () => saveAsPreset(s) }, icon('copy'), 'Save as a preset') : null,
+        s.items.length ? h('button', { class: 'btn small grow', onClick: () => saveAsPreset(s) }, icon('copy'), 'Save as a preset') : null,
         h('button', { class: 'btn small grow danger', onClick: async () => {
           if (!(await confirmSheet('Delete this workout?', `Everything logged in this workout on ${fmtDate(s.date)} is removed.`, 'Delete', true))) return;
           const copy = JSON.parse(JSON.stringify(s));
@@ -338,13 +343,14 @@ function saveAsPreset(s) {
   const items = [];
   for (const it of s.items) {
     if (it.k === 'ex') { const n = it.sets.filter(x => x.f !== 'w').length; if (n) items.push({ k: 'ex', ex: it.ex, sets: n }); }
+    else if (it.k === 'cardio') items.push({ k: 'cardio', ex: it.ex, min: it.min || 30, rpe: it.rpe || 4, ...(it.name ? { name: it.name } : {}) });
     else if (it.k === 'block' && it.block && state.blocks[it.block] && !state.blocks[it.block].deleted) items.push({ k: 'block', block: it.block, rounds: it.rounds.length });
     else if (it.k === 'block') for (const id of it.exIds) items.push({ k: 'ex', ex: id, sets: it.rounds.length });
   }
   sheet({
     title: 'Save as a preset',
     body: [field('Name', h('input', { type: 'text', placeholder: 'e.g. Upper A', onInput: e => { name = e.target.value; } })),
-      h('p', { class: 'note', style: { marginTop: '10px' } }, `${items.length} exercises and blocks, with the number of sets you did. Pick it as the type of any planned day, or let the planner hand it out.`)],
+      h('p', { class: 'note', style: { marginTop: '10px' } }, `${items.length} items (exercises, blocks, cardio), with the sets and minutes you did. Pick it as the type of any planned day, or let the planner hand it out.`)],
     footer: api => [h('button', { class: 'btn', onClick: () => api.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => {
       if (!name.trim()) return toast('Give the preset a name.');
       put('presets', { id: uid('p'), name: name.trim(), items, plan: true }, 'library'); api.close(); toast('Preset saved');

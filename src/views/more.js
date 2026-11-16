@@ -7,7 +7,7 @@ import { MUSCLES, JOINTS, MUSCLE } from '../library.js';
 import { importFile, importPlan, examplePlan } from '../importers.js';
 import { syncState, syncNow, syncKind, testGithub, cleanRepo, saveFile, shareFile, isAndroid, inArtifact } from '../sync.js';
 import { ymd, norm, fmtDate, weekStart, fmtNum } from '../util.js';
-import { editExercise, editBlock, editPreset, muscleSummary, markMine, exName, blockMinutes, itemLabel } from './common.js';
+import { editExercise, editBlock, editPreset, muscleSummary, markMine, exName, blockMinutes, itemLabel, presetSummary } from './common.js';
 import { planMinutes } from '../planner.js';
 
 const VERSION = typeof __VERSION__ !== 'undefined' ? __VERSION__ : 'dev';
@@ -74,8 +74,8 @@ function presets(root, ctx) {
   const list = Object.values(state.presets).filter(p => !p.deleted);
   root.appendChild(h('button', { class: 'btn primary block', onClick: () => editPreset(null, () => ctx.refresh()) }, icon('plus'), 'New preset'));
   root.appendChild(list.length ? h('div', { class: 'panel', style: { padding: '4px 14px', marginTop: '12px' } }, h('div', { class: 'list' }, list.map(p => h('button', { onClick: () => editPreset(p.id, () => ctx.refresh()) },
-    h('span', { class: 'grow' }, h('div', { class: 't' }, p.name), h('div', { class: 's' }, p.items.map(i => itemLabel(i).name).join(', ')), h('div', { class: 's' }, `about ${planMinutes(state, p.items)} min`)), icon('right', 16)))))
-    : h('div', { class: 'empty' }, h('b', null, 'No presets yet'), 'Save a workout such as "Upper A" once. Then pick it as the type for any day, or let the planner hand your presets out across the week.'));
+    h('span', { class: 'grow' }, h('div', { class: 't' }, p.name), h('div', { class: 's' }, presetSummary(p))), icon('right', 16)))))
+    : h('div', { class: 'empty' }, h('b', null, 'No presets yet'), 'Save a workout such as "Upper A", "Easy run" or "Hip 3" once: gym work, cardio, or both. Then add one or several to any planned day, or to the workout you are doing, in one tap.'));
 }
 
 // ---------- settings
@@ -114,6 +114,10 @@ function settings(root, ctx) {
         h('div', { class: 'sec' }, 'Joints and tendons'),
         JOINTS.map(j => h('div', { class: 'mrow', style: { gridTemplateColumns: '1fr 66px' } }, h('span', { class: 'nm' }, j.name), numInput(halfLife(s, j.id), v => { if (v >= 4) setSetting('halfLife', { ...(state.settings.halfLife || {}), [j.id]: v }); }, { int: true, style: 'text-align:center;min-height:38px', 'aria-label': `${j.name} half-life in hours` }))),
         h('button', { class: 'btn block', style: { marginTop: '12px' }, onClick: async () => { if (await confirmSheet('Reset targets and recovery speeds?', 'Back to the built-in defaults.', 'Reset')) { state.settings.targets = {}; state.settings.halfLife = {}; setSetting('targets', {}); ctx.refresh(); } } }, 'Reset to defaults')))));
+}
+
+function planMsg(r) {
+  return [r.presets ? `${r.presets} ${r.presets === 1 ? 'preset' : 'presets'} saved` : '', `${r.added} planned items on ${r.days} ${r.days === 1 ? 'day' : 'days'}`, r.missing?.length ? `Unknown presets skipped: ${r.missing.join(', ')}` : ''].filter(Boolean).join('. ') + '.';
 }
 
 // ---------- backup, sync, import
@@ -167,7 +171,7 @@ function data(root, ctx) {
       if (r.kind === 'backup') {
         const replace = await confirmSheet('Import backup', 'Merge keeps everything you have and adds what is in the file (newest version of each entry wins). Choose Cancel to stop.', 'Merge into my data');
         if (replace) { importJson(r.obj, 'merge'); toast('Backup merged'); }
-      } else if (r.kind === 'plan') toast(`Added ${r.added} planned sessions on ${r.days} days`);
+      } else if (r.kind === 'plan') toast(planMsg(r));
       else { sheet({ title: 'Import finished', body: [h('p', null, `Imported ${r.sets} sets and ${r.cardio} cardio entries on ${r.days} days (${r.from} to ${r.to}).`), r.skipped ? h('p', { class: 'note' }, `${r.skipped} rows had no reps and were skipped.`) : null,
         r.keptEdited ? h('p', { class: 'note' }, `${r.keptEdited} days were left alone because you changed them in the app.`) : null,
         r.created.length ? h('div', { class: 'banner', style: { marginTop: '10px' } }, icon('info'), h('div', null, 'These exercises were not recognised and were created without muscles. Open Exercises and set their muscles so they count toward load: ', h('b', null, r.created.join(', ')))) : h('p', { class: 'note' }, 'Every exercise was matched to the library. Check the muscle settings under Exercises if a name was matched loosely.')] }); }
@@ -188,7 +192,7 @@ function data(root, ctx) {
     h('p', { class: 'note', style: { marginBottom: '10px' } }, 'Ask Claude (for example in your marathon project) to "export the next weeks as a Styrke plan". Paste the result here, import it as a file, or with GitHub sync let Claude drop it in the repository\'s inbox folder and it appears on the next sync.'),
     h('textarea', { placeholder: '{ "styrke": "plan", "sessions": [ … ] }', style: { minHeight: '96px', fontFamily: 'ui-monospace, monospace', fontSize: '12.5px' }, onInput: e => { planText = e.target.value; } }),
     h('div', { class: 'row', style: { marginTop: '8px' } },
-      h('button', { class: 'btn primary grow', onClick: () => { try { const r = importPlan(JSON.parse(planText)); toast(`Added ${r.added} planned sessions on ${r.days} days`); ctx.refresh(); } catch (e) { toast(e instanceof SyntaxError ? 'That is not valid JSON.' : e.message); } } }, 'Import plan'),
+      h('button', { class: 'btn primary grow', onClick: () => { try { const r = importPlan(JSON.parse(planText)); toast(planMsg(r)); ctx.refresh(); } catch (e) { toast(e instanceof SyntaxError ? 'That is not valid JSON.' : e.message); } } }, 'Import plan'),
       h('button', { class: 'btn', onClick: async () => { const t = JSON.stringify(examplePlan(), null, 2); try { await navigator.clipboard.writeText(t); toast('Example copied'); } catch { sheet({ title: 'Example plan', body: h('pre', { style: { whiteSpace: 'pre-wrap', fontSize: '12.5px' } }, t) }); } } }, 'Copy an example')));
 
   const snaps = h('div', { class: 'panel' }, h('h2', null, 'Restore points'), h('div', { id: 'snaps', class: 'note' }, 'Loading…'),

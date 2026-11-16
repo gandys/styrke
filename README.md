@@ -13,6 +13,7 @@ It works fully offline. Your data lives on your device and, if you turn it on, i
 - **Plan**: tap days on a calendar to commit to them, up to three months ahead. Give a day a type (upper, lower, push, pull, a preset of yours, ...) or leave it open. The **automatic planner** fills committed days so each muscle gets its weekly sets, is trained once it has recovered, and the session fits your time.
 - **Body**: a front/back figure coloured by the load on each muscle and joint right now, or in 24/48/72 hours. Log pain (0-10) on joints and tendons; the planner goes easy on, or avoids, what loads them.
 - **Insights**: volume and **weight-adjusted volume**, heavy/moderate/light split, whole-body load, per-exercise progress, cardio, consistency, recent bests.
+- **Presets**: save whole workouts ("Upper A", "Easy run", "Hip 3"), gym work, cardio or both. Put one or several on a planned day, or add them to the workout you are doing.
 - **More**: exercise library (edit muscles, create your own), blocks, workout presets, settings, backup, sync and import.
 
 How the numbers are calculated is explained in the app under *More > How the numbers work*, and in [`src/model.js`](src/model.js).

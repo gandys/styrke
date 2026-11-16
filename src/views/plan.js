@@ -4,21 +4,24 @@
 import { h, icon, iconBtn, sheet, toast, confirmSheet, seg, field, numInput, toggle } from '../ui.js';
 import { state, put, del, commit, touch, setSetting, sessionsOn } from '../store.js';
 import { analyze, getSettings, muscleTarget, isDeloadWeek, myExercises } from '../model.js';
-import { autoPlan, planMinutes, weekProjection } from '../planner.js';
+import { autoPlan, planMinutes, weekProjection, presetItems, dayPresets } from '../planner.js';
 import { MUSCLES, TYPES, TYPE } from '../library.js';
 import { ymd, addDays, parseYmd, weekStart, MONTHS, DOW_SHORT, fmtDate, relDay, diffDays, fmtMin, fmtNum, uid } from '../util.js';
-import { pickExercise, pickBlock, itemLabel, exName, muscleSummary, editBlock } from './common.js';
+import { pickExercise, pickBlock, itemLabel, exName, muscleSummary, editBlock, editPreset } from './common.js';
 
 const HORIZON = 92; // days ahead you can commit to
 let curMonth = null;
 let range = 14;
 
-function typeName(pd) {
+export function typeName(pd) {
   if (!pd) return '';
-  if (pd.type?.startsWith('preset:')) return state.presets[pd.type.slice(7)]?.name || 'Preset';
+  const pres = dayPresets(state, pd);
+  if (pres.length) return pres.map(p => p.name).join(' + ');
   return TYPE[pd.type || 'auto']?.name || 'Auto';
 }
 function shortLabel(pd) {
+  const pres = dayPresets(state, pd);
+  if (pres.length) return pres[0].name + (pres.length > 1 ? ' +' + (pres.length - 1) : '');
   const cardio = (pd.items || []).filter(i => i.k === 'cardio');
   const strength = (pd.items || []).filter(i => i.k !== 'cardio');
   const t = pd.type || 'auto';
@@ -185,8 +188,18 @@ export function openDaySheet(date, ctx) {
     body: api => {
       const pd = get();
       const presets = Object.values(state.presets).filter(p => !p.deleted);
-      const types = [...TYPES.filter(t => t.id !== 'rest').map(t => ({ id: t.id, name: t.name })), ...presets.map(p => ({ id: 'preset:' + p.id, name: p.name }))];
+      const types = TYPES.filter(t => t.id !== 'rest').map(t => ({ id: t.id, name: t.name }));
       const items = pd.items || [];
+      const onDay = dayPresets(state, pd);
+      const togglePreset = p => {
+        if (onDay.includes(p)) pd.items = items.filter(i => i.pre !== p.id);
+        else {
+          // a day built from presets is exactly those presets: stop the planner adding more on top
+          pd.items = [...items.filter(i => i.src !== 'auto'), ...presetItems(state, p)];
+          if ((pd.type || 'auto') === 'auto') pd.type = 'custom';
+        }
+        delete pd.notes; save(); api.render();
+      };
       const add = it => { pd.items = [...items, { id: uid('i'), src: 'user', ...it }]; save(); api.render(); };
       return [
         h('label', { class: 'f' }, 'Type of workout'),
@@ -195,16 +208,21 @@ export function openDaySheet(date, ctx) {
           if (t.id !== 'custom') { const res = autoPlan(state, analyze(state), { from: date, to: date }); applyPlan(res); }
           api.render();
         } }, t.name))),
-        h('p', { class: 'note tiny', style: { margin: '8px 2px 0' } }, pd.type === 'custom' ? 'Custom: only what you add by hand. The planner leaves this day alone.' : (pd.type || 'auto') === 'auto' ? 'Auto: the planner picks what is most useful that day.' : 'The planner fills this day with exercises that fit the type.'),
+        h('label', { class: 'f', style: { marginTop: '14px' } }, 'Presets (tap one or several)'),
+        h('div', { class: 'chips' },
+          presets.map(p => h('button', { class: 'chip' + (onDay.includes(p) ? ' on' : ''), 'aria-pressed': String(onDay.includes(p)), onClick: () => togglePreset(p) }, p.name)),
+          h('button', { class: 'chip', style: { color: 'var(--accent)' }, onClick: () => editPreset(null, p => { if (p) togglePreset(p); else api.render(); }) }, icon('plus', 16), 'New preset')),
+        h('p', { class: 'note tiny', style: { margin: '8px 2px 0' } }, pd.type === 'custom' ? 'Custom: only the presets and items you add. The planner leaves this day alone.' : (pd.type || 'auto') === 'auto' ? 'Auto: the planner picks what is most useful that day.' : 'The planner fills this day with exercises that fit the type.'),
         h('div', { class: 'row', style: { marginTop: '14px' } }, h('span', { class: 'grow' }, 'Time available'),
           h('div', { style: { width: '92px' } }, numInput(pd.minutes ?? '', v => { pd.minutes = v >= 10 ? v : undefined; save(); }, { int: true, placeholder: String(settings.maxMinutes), 'aria-label': 'Minutes available', style: 'text-align:center' })), h('span', { class: 'dim' }, 'min')),
         h('div', { class: 'sec' }, 'Workout', items.length ? h('span', { class: 'note', style: { fontWeight: 400 } }, 'about ' + fmtMin(planMinutes(state, items))) : null),
         pd.notes?.length ? h('div', { class: 'banner', style: { fontSize: '13.5px' } }, icon('info'), h('div', null, pd.notes.map(n => h('div', null, n)))) : null,
         items.length ? h('div', null, items.map((it, i) => { const l = itemLabel(it); return h('div', { class: 'plan-item' },
-          h('div', { class: 'grow' }, h('div', { style: { fontWeight: 500 } }, l.name, it.src === 'import' ? h('span', { class: 'tag acc', style: { marginLeft: '8px' } }, it.source || 'imported') : it.src === 'user' ? h('span', { class: 'tag', style: { marginLeft: '8px' } }, 'by hand') : null),
+          h('div', { class: 'grow' }, h('div', { style: { fontWeight: 500 } }, l.name, it.pre && state.presets[it.pre] ? h('span', { class: 'tag acc', style: { marginLeft: '8px' } }, state.presets[it.pre].name) : it.src === 'import' ? h('span', { class: 'tag acc', style: { marginLeft: '8px' } }, it.source || 'imported') : it.src === 'user' ? h('span', { class: 'tag', style: { marginLeft: '8px' } }, 'by hand') : null),
             l.sub ? h('div', { class: 'note tiny ell' }, l.sub) : null),
           it.k === 'ex' ? h('div', { style: { width: '58px' } }, numInput(it.sets || 3, v => { it.sets = Math.max(1, v || 1); if (it.src === 'auto') it.src = 'user'; save(); }, { int: true, 'aria-label': 'Sets', style: 'text-align:center;min-height:38px' }))
             : it.k === 'cardio' ? h('div', { style: { width: '58px' } }, numInput(it.min ?? '', v => { it.min = v || undefined; save(); }, { int: true, placeholder: 'min', 'aria-label': 'Minutes', style: 'text-align:center;min-height:38px' })) : h('span', { class: 'q' }, l.q),
+          i > 0 ? iconBtn('up', 'Move up', () => { const arr = [...items]; arr.splice(i - 1, 0, arr.splice(i, 1)[0]); pd.items = arr; save(); api.render(); }) : h('span', { style: { width: '40px' } }),
           iconBtn('x', 'Remove', () => { pd.items = items.filter(x => x !== it); save(); api.render(); })); }))
           : h('p', { class: 'note' }, 'Empty. Add things yourself, or let the planner fill the day.'),
         h('div', { class: 'row', style: { marginTop: '10px' } },

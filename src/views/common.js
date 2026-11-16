@@ -4,8 +4,8 @@ import { h, sheet, icon, iconBtn, field, toggle, seg, toast, confirmSheet, numIn
 import { state, put, del, commit, touch } from '../store.js';
 import { MUSCLES, MUSCLE, JOINTS, EQUIP, LIB, primaryMuscle } from '../library.js';
 import { getEx, allExercises, analyze } from '../model.js';
-import { itemMinutes } from '../planner.js';
-import { norm, uid, fmtDate } from '../util.js';
+import { itemMinutes, planMinutes, presetItems } from '../planner.js';
+import { norm, uid, fmtDate, ymd } from '../util.js';
 
 export function exName(id) { return getEx(state, id)?.name || 'Unknown exercise'; }
 
@@ -185,12 +185,16 @@ export function editPreset(id, onSaved) {
         h('div', null, h('label', { class: 'f' }, 'Exercises and blocks, in order'),
           h('div', { class: 'list' }, d.items.map((it, i) => { const l = itemLabel(it); return h('div', null,
             h('span', { class: 'grow' }, h('div', { class: 't' }, l.name), h('div', { class: 's ell' }, l.sub)),
-            it.k === 'ex' ? h('div', { style: { width: '64px' } }, numInput(it.sets || 3, v => { it.sets = Math.max(1, v || 1); }, { int: true, 'aria-label': 'Sets', style: 'text-align:center' })) : h('span', { class: 'dim' }, l.q),
+            it.k === 'ex' ? h('div', { style: { width: '64px' } }, numInput(it.sets || 3, v => { it.sets = Math.max(1, v || 1); }, { int: true, 'aria-label': 'Sets', style: 'text-align:center' }))
+              : it.k === 'cardio' ? h('div', { class: 'row', style: { gap: '4px' } }, h('div', { style: { width: '64px' } }, numInput(it.min ?? '', v => { it.min = v || undefined; }, { int: true, placeholder: 'min', 'aria-label': 'Minutes', style: 'text-align:center' })), h('span', { class: 'dim tiny' }, 'min'))
+              : h('span', { class: 'dim' }, l.q),
             i > 0 ? iconBtn('up', 'Move up', () => { d.items.splice(i - 1, 0, d.items.splice(i, 1)[0]); api.render(); }) : null,
             iconBtn('x', 'Remove', () => { d.items.splice(i, 1); api.render(); })); })),
           h('div', { class: 'row', style: { marginTop: '8px' } },
             h('button', { class: 'btn small grow', onClick: () => pickExercise({ kind: 'strength', onPick: ex => { d.items.push({ k: 'ex', ex: ex.id, sets: 3 }); api.render(); } }) }, icon('plus'), 'Exercise'),
-            h('button', { class: 'btn small grow', onClick: () => pickBlock(b => { d.items.push({ k: 'block', block: b.id, rounds: b.rounds }); api.render(); }) }, icon('plus'), 'Block'))),
+            h('button', { class: 'btn small grow', onClick: () => pickBlock(b => { d.items.push({ k: 'block', block: b.id, rounds: b.rounds }); api.render(); }) }, icon('plus'), 'Block'),
+            h('button', { class: 'btn small grow', onClick: () => pickExercise({ kind: 'cardio', title: 'Add cardio', onPick: ex => { d.items.push({ k: 'cardio', ex: ex.id, min: 30, rpe: 4 }); api.render(); } }) }, icon('plus'), 'Cardio')),
+          h('p', { class: 'note tiny', style: { marginTop: '8px' } }, 'A preset can be gym work, cardio, or both: "Easy run", "Lower", "Hip 3". Several presets can go on the same day.')),
         h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 't' }, 'Let the planner hand it out'), h('div', { class: 'note tiny' }, 'Used when the planner is set to distribute whole presets.')), toggle(d.plan !== false, v => { d.plan = v; }, 'Planner')),
       ),
       !isNew ? h('button', { class: 'btn block danger', style: { marginTop: '16px' }, onClick: async () => { if (await confirmSheet('Delete preset?', 'Planned days that use it fall back to Auto.', 'Delete', true)) { del('presets', d.id, 'library'); api.close(); onSaved && onSaved(null); } } }, 'Delete preset') : null,
@@ -198,8 +202,47 @@ export function editPreset(id, onSaved) {
     footer: api => [h('button', { class: 'btn', onClick: () => api.close() }, 'Cancel'), h('button', { class: 'btn primary', onClick: () => {
       if (!d.name.trim()) return toast('Give the preset a name.');
       if (!d.items.length) return toast('Add at least one exercise.');
-      put('presets', d, 'library'); api.close(); toast('Saved'); onSaved && onSaved(d);
+      put('presets', d, 'library');
+      const n = refreshPresetOnDays(d.id);
+      api.close(); toast(n ? `Saved. Updated on ${n} planned ${n === 1 ? 'day' : 'days'}.` : 'Saved'); onSaved && onSaved(d);
     } }, 'Save')],
+  });
+}
+
+/** After a preset changes, planned days from today on that use it get the new version. */
+function refreshPresetOnDays(id) {
+  const p = state.presets[id]; const today = ymd(); let n = 0;
+  for (const pd of Object.values(state.plan)) {
+    if (pd.deleted || pd.date < today) continue;
+    const idx = (pd.items || []).findIndex(i => i.pre === id && i.src === 'preset');
+    if (idx < 0) continue;
+    const rest = pd.items.filter(i => !(i.pre === id && i.src === 'preset'));
+    const at = pd.items.slice(0, idx).filter(i => !(i.pre === id && i.src === 'preset')).length;
+    rest.splice(at, 0, ...presetItems(state, p));
+    pd.items = rest; touch(pd); n++;
+  }
+  if (n) commit('plan');
+  return n;
+}
+
+export function presetSummary(p) {
+  const names = p.items.map(i => itemLabel(i).name);
+  return `${names.slice(0, 5).join(', ')}${names.length > 5 ? ` and ${names.length - 5} more` : ''}. About ${planMinutes(state, p.items)} min`;
+}
+
+export function pickPreset(onPick, title = 'Add a preset') {
+  sheet({
+    title,
+    body: api => {
+      const presets = Object.values(state.presets).filter(p => !p.deleted);
+      return [
+        h('div', { class: 'list' }, presets.length ? presets.map(p => h('div', null,
+          h('button', { class: 'grow', style: { textAlign: 'left' }, onClick: () => { api.close(); onPick(p); } }, h('div', { class: 't' }, p.name), h('div', { class: 's' }, presetSummary(p))),
+          iconBtn('edit', 'Edit preset', () => editPreset(p.id, () => api.render()))))
+          : h('div', { class: 'empty' }, h('b', null, 'No presets yet'), 'Save a workout you repeat, such as "Easy run", "Lower" or "Hip 3", and add it to any day in one tap.')),
+        h('button', { class: 'btn block', style: { marginTop: '12px' }, onClick: () => editPreset(null, p => { if (p) { api.close(); onPick(p); } }) }, icon('plus'), 'Create new preset'),
+      ];
+    },
   });
 }
 

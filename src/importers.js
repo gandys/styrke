@@ -3,6 +3,7 @@
 import { LIBRARY, LIB } from './library.js';
 import { getEx, allExercises } from './model.js';
 import { state, commit, touch } from './store.js';
+import { presetItems } from './planner.js';
 import { norm, num, parseCsv, ymd, uid, addDays } from './util.js';
 
 // ---------- minimal .xlsx reader (zip + sheet xml), no dependencies
@@ -211,7 +212,26 @@ const TYPE_IDS = ['auto', 'upper', 'lower', 'full', 'push', 'pull', 'legs', 'arm
 export function importPlan(obj) {
   if (!obj || !Array.isArray(obj.sessions)) throw new Error('Plan file needs a "sessions" list.');
   const source = String(obj.source || 'import');
-  let removed = 0, added = 0; const dates = new Set();
+  let removed = 0, added = 0, madePresets = 0; const dates = new Set(); const missing = new Set();
+  const findPreset = name => Object.values(state.presets).find(p => !p.deleted && norm(p.name) === norm(name));
+  // presets defined in the file: created, or replaced when one with the same name exists
+  for (const def of obj.presets || []) {
+    if (!def?.name || !Array.isArray(def.items)) continue;
+    const items = [];
+    for (const it of def.items) {
+      const kind = String(it.kind || '').toLowerCase();
+      if (it.block) { const b = Object.values(state.blocks).find(b => !b.deleted && norm(b.name) === norm(it.block)); if (b) items.push({ k: 'block', block: b.id, rounds: num(it.rounds) || b.rounds }); }
+      else if (kind && kind !== 'strength') {
+        let exId = KIND_EX[kind] || (it.activity ? resolveExercise(it.activity, { kind: 'cardio' }) : 'cardio_other');
+        if (!state.ex[exId]?.mine) state.ex[exId] = touch({ ...(state.ex[exId] || { id: exId }), mine: true });
+        items.push({ k: 'cardio', ex: exId, min: num(it.minutes) || 30, km: num(it.km) || undefined, rpe: num(it.effort) || 4, ...(it.name ? { name: it.name } : {}) });
+      } else if (it.exercise || it.name) { const exId = resolveExercise(it.exercise || it.name); if (exId) items.push({ k: 'ex', ex: exId, sets: num(it.sets) || 3 }); }
+    }
+    if (!items.length) continue;
+    const old = findPreset(def.name);
+    const rec = touch({ id: old?.id || uid('p'), name: String(def.name).trim(), items, plan: old?.plan ?? true });
+    state.presets[rec.id] = rec; madePresets++;
+  }
   if (obj.replace && obj.replace.from && obj.replace.to) {
     for (const pd of Object.values(state.plan)) {
       if (pd.deleted || pd.date < obj.replace.from || pd.date > obj.replace.to) continue;
@@ -227,7 +247,10 @@ export function importPlan(obj) {
     const kind = String(s.kind || 'strength').toLowerCase();
     if (kind === 'strength') {
       if (s.type && TYPE_IDS.includes(s.type)) pd.type = s.type;
-      if (s.preset) { const p = Object.values(state.presets).find(p => !p.deleted && norm(p.name) === norm(s.preset)); if (p) pd.type = 'preset:' + p.id; }
+      // one or several presets on the day, e.g. "presets": ["Easy run", "Lower", "Hip 3"]
+      const names = [].concat(s.presets || [], s.preset || []);
+      for (const nm of names) { const p = findPreset(nm); if (!p) { missing.add(String(nm)); continue; } const its = presetItems(state, p, 'import', { source }); pd.items.push(...its); added += its.length; }
+      if (names.length && (pd.type || 'auto') === 'auto' && !s.type) pd.type = 'custom';
       for (const it of s.items || []) {
         const exId = resolveExercise(it.exercise || it.name); if (!exId) continue;
         const reps = String(it.reps || '').match(/(\d+)\s*[-–]\s*(\d+)/);
@@ -248,7 +271,7 @@ export function importPlan(obj) {
   }
   commit('import');
   const sorted = [...dates].sort();
-  return { added, removed, days: dates.size, from: sorted[0], to: sorted[sorted.length - 1], source };
+  return { added, removed, days: dates.size, from: sorted[0], to: sorted[sorted.length - 1], source, presets: madePresets, missing: [...missing] };
 }
 
 /** A small, valid example of the plan format, shown in the app and docs. */

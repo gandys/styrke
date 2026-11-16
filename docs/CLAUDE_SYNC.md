@@ -32,6 +32,35 @@ This file describes the format so that Claude (or any tool) can produce it.
 | cardio fields | `name` (label), `minutes`, `km`, `effort` (1-10, default 4), `note`. For other activities add `"activity": "Name"`; it is matched to the exercise library or created. |
 | strength fields | `type`: `auto`, `upper`, `lower`, `full`, `push`, `pull`, `legs`, `arms`, `core` or `custom`. `preset`: name of one of the user's presets. `items`: fixed exercises (`exercise` name, `sets`, `reps` as `"8-12"` or a number, `note`). Without `items`, the app's planner fills the day according to `type`. |
 
+### Presets: reusable workouts, several per day
+
+A preset is a named workout: gym work, cardio, or both. A day can carry several, which is how a day such as
+"easy run, then legs, then hips" is written. A plan file can define presets and place them:
+
+```json
+{
+  "styrke": "plan",
+  "source": "marathon",
+  "presets": [
+    { "name": "Easy run", "items": [ { "kind": "run", "minutes": 35, "effort": 3 } ] },
+    { "name": "Long run", "items": [ { "kind": "run", "minutes": 60, "effort": 4 } ] },
+    { "name": "Lower",    "items": [ { "exercise": "Leg Press", "sets": 3 }, { "exercise": "Stiff-Leg DL", "sets": 3 }, { "exercise": "Calves", "sets": 3 } ] },
+    { "name": "Hip 3",    "items": [ { "exercise": "Banded Hip Work", "sets": 3 }, { "exercise": "Hip Abduction", "sets": 3 } ] }
+  ],
+  "sessions": [
+    { "date": "2026-11-17", "presets": ["Easy run", "Lower", "Hip 3"] },
+    { "date": "2026-11-21", "presets": ["Long run", "Hip 3"] }
+  ]
+}
+```
+
+- `presets[]` at the top level creates each preset, or replaces the one with the same name. Items are exercises
+  (`exercise`, `sets`), cardio (`kind` as in the table above, `minutes`, `km`, `effort`, `name`) or one of the user's
+  blocks (`"block": "Dumbbell circuit"`, optional `rounds`).
+- `sessions[].presets` puts existing presets on that day in the order given (run first if the run comes before lifting).
+  The day is then exactly those presets; add `"type": "upper"` (or another type) if the app's planner should top it up.
+- Unknown preset names are skipped and reported after the import.
+
 Exercise names are matched against the user's exercises and the built-in library (case and accents ignored). Unknown names are created as new exercises without muscles, flagged for the user to complete.
 
 Planned cardio counts toward the load forecast: a planned run tomorrow shows on the body map and makes the planner go lighter on legs around it.

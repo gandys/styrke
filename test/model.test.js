@@ -171,3 +171,52 @@ test('whole-body load series has acute and chronic averages', () => {
   assert.equal(s.length, 29);
   assert.ok(s.at(-1).acute > 0 && s.at(-1).chronic > 0 && s.at(-1).ratio > 0.5 && s.at(-1).ratio < 1.6);
 });
+
+test('presets: cardio inside a preset, several presets on one day, plan files that define and stack them', async () => {
+  const { presetItems, dayPresets, migratePresetDays, planMinutes: pm, planDayEvent } = await import('../src/planner.js');
+  fresh();
+  state.ex.band_abduction = { id: 'band_abduction', mine: true, u: 1 };
+  state.presets.run = { id: 'run', name: 'Easy run', items: [{ k: 'cardio', ex: 'run', min: 35, rpe: 3 }], u: 1 };
+  state.presets.low = { id: 'low', name: 'Lower', items: [{ k: 'ex', ex: 'leg_press', sets: 3 }, { k: 'ex', ex: 'db_rdl', sets: 3 }, { k: 'ex', ex: 'calf_raise', sets: 3 }], u: 1 };
+  state.presets.hip = { id: 'hip', name: 'Hip 3', items: [{ k: 'ex', ex: 'band_abduction', sets: 3 }, { k: 'block', block: 'b1', rounds: 2 }], u: 1 };
+  const today = ymd(); const d = addDays(today, 1);
+  // stack three presets on one day
+  const items = [...presetItems(state, state.presets.run), ...presetItems(state, state.presets.low), ...presetItems(state, state.presets.hip)];
+  state.plan[d] = { date: d, on: true, type: 'custom', items, u: 1 }; state._rev++;
+  assert.deepEqual(dayPresets(state, state.plan[d]).map(p => p.name), ['Easy run', 'Lower', 'Hip 3']);
+  assert.equal(items[0].k, 'cardio'); assert.equal(items[0].min, 35);
+  assert.equal(items.length, 6);
+  // the planner leaves a custom day exactly as built, and counts the run
+  const res = autoPlan(state, analyze(state), { from: today, to: d, today });
+  assert.equal(res.days[d].items.length, 6);
+  assert.equal(res.days[d].minutes, pm(state, items));
+  const ev = planDayEvent(state, state.plan[d]);
+  assert.ok(ev.joints.achilles > 2 && ev.sets.quads >= 3 && ev.sets.abductors >= 3);
+  // Achilles pain: the run and calf work are flagged, not silently dropped
+  state.pain.p = { id: 'p', t: Date.now(), region: 'achilles', level: 5, u: 1 }; state._rev++;
+  const res2 = autoPlan(state, analyze(state), { from: today, to: d, today });
+  assert.equal(res2.days[d].items.length, 6);
+  assert.ok(res2.days[d].notes.some(n => /Achilles/.test(n) && /run/i.test(n)));
+  delete state.pain.p;
+
+  // old data: one preset stored as the day's type becomes items
+  const d2 = addDays(today, 2);
+  state.plan[d2] = { date: d2, on: true, type: 'preset:low', items: [], u: 1 };
+  assert.equal(migratePresetDays(state, today), 1);
+  assert.equal(state.plan[d2].type, 'custom'); assert.equal(state.plan[d2].items.length, 3);
+  assert.equal(migratePresetDays(state, today), 0);
+
+  // a plan file can define presets (with cardio) and put several on a day
+  const r = importPlan({ styrke: 'plan', source: 'marathon',
+    presets: [{ name: 'Long run', items: [{ kind: 'run', minutes: 60, effort: 4 }] }, { name: 'Hip 3', items: [{ exercise: 'Hip Abduction', sets: 3 }, { exercise: 'Calf Raise', sets: 3 }] }],
+    sessions: [{ date: '2027-02-06', presets: ['Long run', 'Hip 3', 'Nope'] }, { date: '2027-02-02', kind: 'strength', presets: ['Easy run', 'Lower', 'Hip 3'] }, { date: '2027-02-07', kind: 'rest' }] });
+  assert.equal(r.presets, 2); assert.deepEqual(r.missing, ['Nope']);
+  assert.equal(state.presets.hip.items.length, 2, 'a preset with the same name is replaced, keeping its id');
+  const sat = state.plan['2027-02-06'];
+  assert.deepEqual(sat.items.map(i => i.k), ['cardio', 'ex', 'ex']); assert.equal(sat.type, 'custom');
+  assert.deepEqual(dayPresets(state, state.plan['2027-02-02']).map(p => p.name), ['Easy run', 'Lower', 'Hip 3']);
+  assert.ok(!state.plan['2027-02-07'], 'rest days are not committed days');
+  // re-sending the plan with a replace range does not double anything
+  const r2 = importPlan({ styrke: 'plan', source: 'marathon', replace: { from: '2027-02-01', to: '2027-02-28' }, sessions: [{ date: '2027-02-06', presets: ['Long run', 'Hip 3'] }] });
+  assert.equal(r2.removed, 3 + 6); assert.equal(state.plan['2027-02-06'].items.length, 3);
+});

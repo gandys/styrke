@@ -7,6 +7,8 @@ import { syncState, onSync, syncNow, syncSoon, syncKind, dailyFileBackup, isAndr
 import { ymd, addDays } from './util.js';
 import { renderToday, setDate } from './views/today.js';
 import { renderPlan, runAutoPlan } from './views/plan.js';
+import { migratePresetDays } from './planner.js';
+import { commit } from './store.js';
 import { renderBody } from './views/body.js';
 import { renderInsights } from './views/insights.js';
 import { renderMore, morePage, setMorePage } from './views/more.js';
@@ -107,6 +109,7 @@ window.setAndroidInsets = (top, bottom) => { document.documentElement.style.setP
 
 async function boot() {
   await load();
+  if (migratePresetDays(state)) commit('migrate');
   const s = getSettings(state);
   document.documentElement.dataset.theme = s.theme || 'dark';
   const hash = (location.hash || '').slice(1);
@@ -115,6 +118,7 @@ async function boot() {
   render(true);
   onStore(reason => {
     if (reason === 'saved') { drawSync(); return; }
+    if ((reason === 'sync' || reason === 'import') && migratePresetDays(state)) commit('migrate');
     if (reason !== 'sync') syncSoon(); else if (!/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '') && !sheetOpen()) render();
     dailyFileBackup();
   });

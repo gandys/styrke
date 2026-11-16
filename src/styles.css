@@ -186,7 +186,7 @@ label.f { display: block; font-size: 13px; color: var(--dim); margin: 0 0 6px 2p
 .dock { position: fixed; left: 0; right: 0; bottom: calc(var(--nav-h) + var(--safe-b)); z-index: 25; padding: 10px 16px; pointer-events: none; }
 .dock > div { max-width: 608px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
 .dock .addbar { display: flex; gap: 8px; pointer-events: auto; }
-.dock .addbar .btn { flex: 1; box-shadow: 0 6px 20px rgba(0, 0, 0, .28); background: var(--raised); }
+.dock .addbar .btn { flex: 1; padding: 0 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, .28); background: var(--raised); }
 .dock .addbar .btn.primary { background: var(--accent); flex: 1.5; }
 .timer { pointer-events: auto; display: flex; align-items: center; gap: 12px; background: var(--text); color: var(--bg); border-radius: 14px; padding: 8px 8px 8px 16px; box-shadow: 0 6px 20px rgba(0, 0, 0, .3); position: relative; overflow: hidden; }
 .timer .t { font-family: var(--num); font-weight: 700; font-size: 26px; min-width: 62px; }

@@ -62,6 +62,39 @@ export function planDayEvent(state, pd) {
   return ev;
 }
 
+/** A preset turned into plan items for a day. Items remember which preset they came from. */
+export function presetItems(state, preset, src = 'preset', extra = {}) {
+  const out = [];
+  for (const it of preset?.items || []) {
+    const base = { id: uid('i'), pre: preset.id, src, ...extra };
+    if (it.k === 'ex') { if (getEx(state, it.ex)) out.push({ ...base, k: 'ex', ex: it.ex, sets: it.sets || 3 }); }
+    else if (it.k === 'block') { const b = state.blocks?.[it.block]; if (b && !b.deleted) out.push({ ...base, k: 'block', block: it.block, rounds: it.rounds || b.rounds || 3 }); }
+    else if (it.k === 'cardio') { if (getEx(state, it.ex)) out.push({ ...base, k: 'cardio', ex: it.ex, min: it.min || undefined, km: it.km || undefined, rpe: it.rpe || 4, name: it.name || (preset.items.length === 1 ? preset.name : undefined) }); }
+  }
+  return out;
+}
+
+/** The presets a planned day is built from, in the order they appear. */
+export function dayPresets(state, pd) {
+  const out = [];
+  for (const it of pd?.items || []) { const p = it.pre && state.presets?.[it.pre]; if (p && !p.deleted && !out.includes(p)) out.push(p); }
+  if (!out.length && pd?.type?.startsWith('preset:')) { const p = state.presets?.[pd.type.slice(7)]; if (p && !p.deleted) out.push(p); }
+  return out;
+}
+
+/** Older data stored a single preset as the day's type. Turn it into items so presets can be stacked. */
+export function migratePresetDays(state, today = ymd()) {
+  let n = 0;
+  for (const pd of Object.values(state.plan || {})) {
+    if (pd.deleted || !pd.type?.startsWith('preset:') || pd.date < today) continue;
+    const p = state.presets?.[pd.type.slice(7)];
+    const kept = (pd.items || []).filter(i => i.src !== 'auto');
+    pd.items = p && !p.deleted ? [...kept, ...presetItems(state, p)] : kept;
+    pd.type = 'custom'; pd.u = Date.now(); n++;
+  }
+  return n;
+}
+
 /** True once the planned workout for that day has been turned into a logged session. */
 export function planStarted(state, date) {
   return Object.values(state.sessions || {}).some(s => !s.deleted && s.date === date && s.fromPlan);
@@ -179,14 +212,15 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
       const ahead = Math.max(0, diffDays(date, today));
       if (deload) out.notes.push('Lighter week: one set fewer per exercise.');
 
-      if (type === 'rest' || type === 'custom') { out.items = fixed; out.minutes = used; continue; }
-
       // pain notes on fixed items
       for (const it of fixed) {
         const ex = it.k !== 'block' ? getEx(state, it.ex) : null;
         const pc = ex && painCheck(state, ex, date, settings, pain, today);
         if (pc) out.notes.push(`${JOINT[pc.region].name} ${pc.pain}/10: ${pc.level === 'avoid' ? 'consider moving or swapping' : 'go easy on'} ${it.name || ex.name}.`);
       }
+      out.notes = [...new Set(out.notes)];
+
+      if (type === 'rest' || type === 'custom') { out.items = fixed; out.minutes = planMinutes(state, fixed); continue; }
 
       if (type === 'cardio') {
         const items = [...fixed];
@@ -255,13 +289,13 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
           if (preset) { usedCount['p:' + preset.id] = (usedCount['p:' + preset.id] || 0) + 1; out.preset = preset.id; out.notes.push(`Preset: ${preset.name}`); }
         }
         for (const it of preset?.items || []) {
-          const item = { ...it, id: uid('i'), src: 'auto' };
-          if (item.k === 'ex') {
+          const item = { ...it, id: uid('i'), src: 'auto', pre: preset.id };
+          if (item.k === 'ex' || item.k === 'cardio') {
             const ex = getEx(state, item.ex); if (!ex) continue;
             const pc = painCheck(state, ex, date, settings, pain, today);
             if (pc?.level === 'avoid') { out.notes.push(`${JOINT[pc.region].name} ${pc.pain}/10: left out ${ex.name}.`); continue; }
             if (pc) out.notes.push(`${JOINT[pc.region].name} ${pc.pain}/10: go easy on ${ex.name}.`);
-            if (deload) item.sets = Math.max(2, (item.sets || 3) - 1);
+            if (deload && item.k === 'ex') item.sets = Math.max(2, (item.sets || 3) - 1);
           }
           if (used + itemMinutes(state, item) > budgetAll + 3) { out.notes.push('Preset trimmed to fit your time.'); break; }
           commit(item);
