@@ -49,7 +49,7 @@ function render(resetScroll) {
   try { t.render(els.main, ctx); }
   catch (e) { console.error(e); els.main.appendChild(h('div', { class: 'empty' }, h('b', null, 'Something went wrong on this screen'), String(e.message || e), h('div', { style: { marginTop: '12px' } }, 'Your data is safe. Try another tab, or reload.'))); }
   els.main.dataset.tab = tab;
-  els.main.classList.toggle('narrow', tab === 'today' || (tab === 'more' && !['settings', 'data'].includes(morePage())));
+  els.main.classList.toggle('narrow', tab === 'today' || (tab === 'more' && !['settings', 'data', 'science'].includes(morePage())));
   if (tab === 'today') welcome();
   for (const b of els.nav.children) { const on = b.dataset.tab === tab; b.classList.toggle('on', on); b.setAttribute('aria-current', on ? 'page' : 'false'); }
   window.scrollTo(0, resetScroll ? 0 : y);

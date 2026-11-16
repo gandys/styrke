@@ -297,3 +297,35 @@ table.t td.n, table.t th.n { text-align: right; font-family: var(--num); font-si
 .prose p b { color: var(--text); font-weight: 600; }
 .prose code { font-family: var(--num); font-size: 15px; background: var(--raised); padding: 1px 6px; border-radius: 6px; color: var(--text); }
 .prose a { color: var(--accent); }
+
+/* ---------- how the numbers work */
+.how h2 { font-size: 17px; align-items: center; }
+.how .hn { width: 26px; height: 26px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 700; font-size: 16px; flex: none; }
+.how .lead { font-size: 15.5px; line-height: 1.45; margin: 0 0 14px; max-width: 46ch; }
+.how .sub { font-size: 12.5px; font-weight: 600; color: var(--dim); margin: 16px 0 8px; }
+.how .tankbar { display: flex; height: 16px; border-radius: 8px; overflow: hidden; }
+.how .tankbar i { display: block; }
+.how .tanklab { display: flex; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--dim); }
+.how .tanklab span { display: block; } .how .tanklab b { display: block; color: var(--text); font-weight: 600; font-size: 12.5px; }
+.how .tanklab span:nth-child(2) { text-align: center; } .how .tanklab span:nth-child(3) { text-align: right; }
+.hrow { display: grid; grid-template-columns: 96px 1fr 30px; gap: 10px; align-items: center; min-height: 30px; }
+.hrow .hl, .pair .hl { font-size: 13.5px; } .hrow .hv { text-align: right; font-size: 16px; font-weight: 600; }
+.hbadge { display: flex; gap: 12px; align-items: flex-start; padding: 7px 0; }
+.hbadge .n { width: 30px; height: 30px; border-radius: 9px; background: var(--raised); font-family: var(--num); font-weight: 700; font-size: 16px; display: grid; place-items: center; color: var(--dim); flex: none; }
+.hbadge .n.w { color: var(--warn); } .hbadge .n.h { color: var(--good); } .hbadge .n.d { color: var(--c3); }
+.hbadge b { font-weight: 600; font-size: 14.5px; } .hbadge .dot { width: 14px; height: 14px; border-radius: 50%; margin: 3px 8px 0; flex: none; }
+.hsvg { display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto 6px; overflow: visible; }
+.hsvg .htx { font-family: var(--num); font-size: 11.5px; fill: var(--dim); } .hsvg .hax { stroke: var(--line); stroke-width: 1; }
+.hramp { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.hramp div { font-size: 12px; color: var(--dim); } .hramp i { display: block; height: 14px; border-radius: 5px; margin-bottom: 5px; } .hramp b { display: block; color: var(--text); font-size: 12.5px; font-weight: 600; }
+.pair { display: grid; grid-template-columns: 96px 1fr; gap: 10px; align-items: center; margin: 8px 0; }
+.pbar { display: flex; align-items: center; gap: 8px; height: 16px; margin: 3px 0; } .pbar i { display: block; height: 10px; border-radius: 5px; min-width: 4px; } .pbar span { font-size: 14px; color: var(--dim); }
+.formula { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 14px 0 10px; padding: 12px; border-radius: var(--r-s); background: var(--raised); font-size: 16px; }
+.formula .frac { display: inline-flex; flex-direction: column; align-items: center; } .formula .frac span:first-child { border-bottom: 1.5px solid var(--text); padding: 0 6px 2px; } .formula .frac span:last-child { padding-top: 2px; }
+.zone { position: relative; height: 14px; } .zone i { position: absolute; top: 0; bottom: 0; border-right: 2px solid var(--panel); } .zone i:first-child { border-radius: 7px 0 0 7px; } .zone i:last-of-type { border-radius: 0 7px 7px 0; border-right: 0; }
+.zone b { position: absolute; top: -5px; bottom: -5px; width: 3px; margin-left: -1.5px; background: var(--text); border-radius: 2px; } .zone b span { position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 13px; font-weight: 600; }
+.zonelab { position: relative; height: 18px; margin-top: 6px; font-size: 12px; color: var(--dim); } .zonelab span { position: absolute; transform: translateX(-50%); white-space: nowrap; } .zonelab.ticks { margin-top: 0; font-size: 11.5px; color: var(--faint); }
+.pscale { display: grid; grid-template-columns: repeat(11, 1fr); gap: 3px; margin-bottom: 8px; } .pscale i { display: grid; place-items: center; height: 30px; border-radius: 6px; font-style: normal; font-weight: 600; font-size: 15px; }
+.hmore { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 4px; } .hmore summary { cursor: pointer; color: var(--accent); font-weight: 500; font-size: 14px; min-height: 40px; display: flex; align-items: center; } .hmore .prose p { font-size: 14px; }
+.round .wtoggle { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--faint); min-height: 30px; padding: 0 8px; border-radius: 8px; } .round .wtoggle.on { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.bset .bn { text-align: left; } .bset .bn em { font-style: normal; font-family: var(--num); font-weight: 700; margin-right: 5px; } .bset .bn em.w { color: var(--warn); } .bset .bn em.h { color: var(--good); } .bset .bn em.d { color: var(--c3); }

@@ -2,7 +2,9 @@
 
 import { h, icon, iconBtn, sheet, toast, confirmSheet, seg, field, toggle, numInput } from '../ui.js';
 import { state, local, saveLocal, put, del, commit, setSetting, exportJson, exportCsv, importJson, listSnapshots, restoreSnapshot, saveStatus, _reset, flush } from '../store.js';
-import { analyze, allExercises, getSettings, DEFAULTS, muscleTarget, halfLife, bodyweightAt } from '../model.js';
+import { analyze, allExercises, getSettings, DEFAULTS, muscleTarget, halfLife, bodyweightAt, loadSeries } from '../model.js';
+import { lineChart, legend, cssVar } from '../charts.js';
+import { loadColor } from '../bodymap.js';
 import { MUSCLES, JOINTS, MUSCLE } from '../library.js';
 import { importFile, importPlan, examplePlan } from '../importers.js';
 import { syncState, syncNow, syncKind, testGithub, cleanRepo, saveFile, shareFile, isAndroid, inArtifact } from '../sync.js';
@@ -203,27 +205,111 @@ function data(root, ctx) {
   root.appendChild(h('div', { class: 'cols' }, h('div', null, status, ghPanel, snaps), h('div', null, backup, planPanel)));
 }
 
-// ---------- how it works
+// ---------- how it works (pictures first, detail on request)
 function science(root, ctx) {
-  ctx.setTitle('How the numbers work', '');
+  ctx.setTitle('How the numbers work', 'The short version, in pictures');
   const s = getSettings(state);
+  const an = analyze(state);
+  const c1 = cssVar('--c1'), c2 = cssVar('--c2'), c3 = cssVar('--c3');
   const a = (t, u) => h('a', { href: u, target: '_blank', rel: 'noopener' }, t);
-  root.appendChild(h('div', { class: 'panel prose' },
-    h('h3', { style: { marginTop: 0 } }, 'Hard sets'),
-    h('p', null, 'Not every set counts. From your recent best on an exercise the app estimates how many reps you had left. A set within about ', h('b', null, '4 reps of failure'), ' counts as one hard set, fading to zero at 10 reps left, so warm-ups drop out on their own. The estimate cannot see everything (a light set late in a circuit can be hard), so you can overrule it: tap a set\'s number to mark it W (warm-up, does not count), H (counts as a full hard set) or D (drop set).'),
-    h('p', null, 'For each muscle the app adds up ', h('b', null, 'fractional sets'), ': a full set where the muscle is the main mover, half where it helps (triceps in a press). A 2024 meta-regression of 67 studies found this way of counting predicted muscle growth best.'),
-    h('h3', null, 'Weekly targets'),
-    h('p', null, 'More weekly sets build more muscle, with ', h('b', null, 'diminishing returns'), ': roughly four sets a week is the least that reliably works, the step from 6 to 12 is worth more than from 12 to 18, and about 11 sets for one muscle in one session is where extra sets stop showing a benefit. Strength flattens out much sooner than size. The planner uses exactly this: the first sets for a muscle are worth a lot, each further set less, and nothing past the top of your target range.'),
-    h('p', null, 'The per-muscle target ranges and recovery speeds are sensible coaching defaults, not laws. Evidence that specific muscles need different volumes is thin, so adjust them in Settings to how your body responds.'),
-    h('h3', null, 'Load that fades with rest'),
-    h('p', null, 'Each hard set adds load to the muscles it trains (more for big compound lifts) and to the joints it stresses (more when heavy). Load then ', h('b', null, 'halves at a fixed rate'), ': about every 16 to 18 hours for small upper-body muscles, 24 for chest and lats, 30 or more for quads, hamstrings and lower back, and 36 to 48 hours for joints and tendons. A muscle is "ready" when it is back under ', h('code', null, Math.round(s.readyAt * 100) + '%'), ' of a full session\'s load. Cardio counts too: an easy 30 minute run puts roughly a third of a hard session on the calves and Achilles.'),
-    h('p', null, 'This is the classic impulse-response idea from endurance sport, applied per muscle. It is a model of how recovery tends to go, not a measurement of your tissue. If you feel wrecked and the map says fresh, believe your body.'),
-    h('h3', null, 'Weight-adjusted volume'),
-    h('p', null, 'Plain volume (weight × reps) treats 500 reps with 1 kg and one rep with 500 kg as the same. Weight-adjusted volume multiplies each set by how heavy it was against ', h('b', null, 'your usual weight'), ' for that exercise: ', h('code', null, 'weight² × reps ÷ usual weight'), '. Usual weight is your rep-weighted average over the previous ', h('code', null, s.wavSessions), ' sessions. Lift at your normal weights and it equals plain volume. Go heavier and it rises faster than volume, go lighter and it falls behind. The "what kind of work" chart shows the same thing as zones: heavy (85% of your estimated best or more), moderate, light.'),
-    h('h3', null, 'Whole-body load'),
-    h('p', null, 'Gym sets and cardio minutes are combined into one daily number, averaged over the last 7 days (fatigue) and 28 days (what you are used to). Researchers disagree on whether the ratio predicts injuries, so the app only uses it to flag sharp jumps.'),
-    h('h3', null, 'Pain'),
-    h('p', null, 'The pain rule follows the pain-monitoring model from Achilles rehab research: up to about 5/10 during activity is acceptable when it has settled by next morning and is not rising week to week. From ', h('code', null, s.painCaution), ' the planner goes easy on exercises that load the area, from ', h('code', null, s.painAvoid), ' it leaves them out, and it assumes pain eases by about a point a day until you rate it again. It is a training aid, not medical advice.'),
-    h('h3', null, 'Sources'),
-    h('p', null, a('Pelland et al., weekly volume and frequency meta-regressions', 'https://sportrxiv.org/index.php/server/preprint/view/460'), '. ', a('Remmert et al., per-session volume', 'https://sportrxiv.org/index.php/server/preprint/view/537'), '. ', a('Silbernagel et al. 2007, pain-monitoring model', 'https://search.pedro.org.au/search-results/record-detail/18389'), '. ', a('Critique of the acute:chronic workload ratio', 'https://nata.kglmeridian.com/view/journals/attr/55/9/article-p893.xml'), '.')));
+  const more = (...kids) => h('details', { class: 'hmore' }, h('summary', null, 'More detail'), h('div', { class: 'prose' }, kids));
+  const card = (n, title, lead, ...kids) => h('section', { class: 'panel how' }, h('h2', null, h('span', { class: 'hn num' }, n), title), h('p', { class: 'lead' }, lead), kids);
+  const meter = (label, value, max, color, right) => h('div', { class: 'hrow' }, h('span', { class: 'hl' }, label),
+    h('div', { class: 'bar', style: { height: '12px', borderRadius: '6px' } }, h('i', { style: { width: Math.max(0, Math.min(100, value / max * 100)) + '%', background: color, borderRadius: '6px' } })), h('span', { class: 'hv num' }, right));
+  const badge = (letter, cls, title, text) => h('div', { class: 'hbadge' }, h('span', { class: 'n ' + cls }, letter), h('div', null, h('b', null, title), h('div', { class: 'note' }, text)));
+
+  // 1 ---- hard sets
+  const hard = card(1, 'Which sets count', 'Only sets that end close to your limit count as "hard sets". Warm-ups drop out on their own.',
+    h('div', { class: 'tank' },
+      h('div', { class: 'tankbar' }, h('i', { style: { flex: 5, background: 'var(--accent)' } }), h('i', { style: { flex: 6, background: 'linear-gradient(90deg, var(--accent), var(--raised))' } }), h('i', { style: { flex: 5, background: 'var(--raised)' } })),
+      h('div', { class: 'tanklab' }, h('span', { style: { flex: 5 } }, h('b', null, '0–4 reps left'), 'counts as 1 set'), h('span', { style: { flex: 6 } }, h('b', null, '5–9 left'), 'counts partly'), h('span', { style: { flex: 5 } }, h('b', null, '10+ left'), 'counts as 0'))),
+    h('div', { class: 'sub' }, 'Example: incline press, best recent set 27.5 kg × 11'),
+    meter('15 kg × 26', 0, 1, 'var(--accent)', '0'), meter('22.5 kg × 16', 0.45, 1, 'var(--accent)', '0.5'), meter('27.5 kg × 11', 1, 1, 'var(--accent)', '1'),
+    h('div', { class: 'sub' }, 'You can overrule the estimate: tap a set number'),
+    badge('2', '', 'Number', 'Normal set. The app estimates how hard it was.'),
+    badge('W', 'w', 'Warm-up', 'Logged, but never counts.'),
+    badge('H', 'h', 'Hard', 'Always counts as one full set.'),
+    badge('D', 'd', 'Drop set', 'Counts as at least half a set.'),
+    more(h('p', null, 'The app compares each set with your estimated best for that exercise (from your recent sessions) and works out how many more reps you could have done. Up to 4 reps left counts in full, fading to nothing at 10 left. The estimate cannot see everything: a light set late in a circuit can be hard. That is what H is for.')));
+
+  // 2 ---- sets per muscle
+  const perMuscle = card(2, 'Which muscles get the credit', 'The main muscle gets the full set. Muscles that help get about half.',
+    h('div', { class: 'sub' }, '3 hard sets of incline dumbbell press give'),
+    meter('Chest', 3, 3, c1, '3.0'), meter('Front delts', 1.8, 3, c1, '1.8'), meter('Triceps', 1.5, 3, c1, '1.5'),
+    h('p', { class: 'note', style: { marginTop: '8px' } }, 'You can change which muscles an exercise trains under More, Exercises.'),
+    more(h('p', null, 'A 2024 analysis of 67 training studies found that counting helper muscles as half a set predicted muscle growth better than counting them fully or not at all.')));
+
+  // 3 ---- weekly targets: diminishing returns
+  const tg = muscleTarget(s, 'biceps');
+  const W = 320, H = 150, L = 8, B = 24, maxX = 24;
+  const fx = v => L + (W - L - 8) * v / maxX, fy = v => (H - B) - (H - B - 12) * Math.sqrt(v / maxX);
+  let d = ''; for (let v = 0; v <= maxX; v += 0.5) d += (v ? 'L' : 'M') + fx(v).toFixed(1) + ',' + fy(v).toFixed(1);
+  const curve = h('svg', { viewBox: `0 0 ${W} ${H}`, class: 'hsvg', role: 'img', 'aria-label': 'Benefit rises quickly for the first sets and flattens out' },
+    h('rect', { x: fx(tg.lo), y: 6, width: fx(tg.hi) - fx(tg.lo), height: H - B - 6, fill: 'var(--good)', opacity: 0.16 }),
+    h('line', { x1: L, x2: W - 8, y1: H - B, y2: H - B, class: 'hax' }),
+    h('path', { d, fill: 'none', stroke: c1, 'stroke-width': 2.5, 'stroke-linecap': 'round' }),
+    h('circle', { cx: fx(4), cy: fy(4), r: 4.5, fill: c1, stroke: 'var(--panel)', 'stroke-width': 2 }),
+    h('text', { x: fx(4) + 8, y: fy(4) + 14, class: 'htx' }, 'about 4: the least that works'),
+    h('text', { x: (fx(tg.lo) + fx(tg.hi)) / 2, y: 20, class: 'htx', 'text-anchor': 'middle', style: { fill: 'var(--good)' } }, 'your target'),
+    [0, 4, 8, 12, 16, 20, 24].map(v => h('text', { x: fx(v), y: H - 7, class: 'htx', 'text-anchor': 'middle' }, v)),
+    h('text', { x: W - 8, y: H - B - 6, class: 'htx', 'text-anchor': 'end' }, 'hard sets per week'));
+  const targets = card(3, 'How many sets a week', 'The first sets do the most. Each extra set adds a little less, so the planner stops at the top of your target.',
+    curve, h('p', { class: 'note' }, `The green band is your biceps target (${tg.lo}–${tg.hi}). Change any muscle's target in Settings.`),
+    more(h('p', null, 'Research is clear that more weekly sets build more muscle with diminishing returns, and that around 11 sets for one muscle in a single session is where extra sets stop showing a benefit. Strength flattens out much sooner than size.'),
+      h('p', null, 'The exact target for each muscle is a coaching default, not a law. Evidence that particular muscles need different amounts is thin, so adjust to how you respond.')));
+
+  // 4 ---- load fades
+  const hrs = []; for (let t = 0; t <= 96; t += 4) hrs.push(t);
+  const dec = id => hrs.map(t => 100 * Math.pow(0.5, t / halfLife(s, id)));
+  const fade = card(4, 'Load fades while you rest', 'Training puts load on a muscle. Rest halves it at a steady pace: fast for small muscles, slow for legs and tendons.',
+    legend([{ name: `Biceps (halves in ${halfLife(s, 'biceps')} h)`, color: c1 }, { name: `Quads (${halfLife(s, 'quads')} h)`, color: c2 }, { name: `Achilles (${halfLife(s, 'achilles')} h)`, color: c3 }, { name: 'Ready again', color: 'var(--faint)', dash: true }]),
+    lineChart({ labels: hrs.map(t => t % 24 === 0 ? (t === 0 ? 'now' : `+${t / 24} d`) : `+${t} h`), unit: '%', height: 170, fmt: v => fmtNum(v),
+      series: [{ name: 'Biceps', color: c1, values: dec('biceps') }, { name: 'Quads', color: c2, values: dec('quads') }, { name: 'Achilles', color: c3, values: dec('achilles') }, { name: 'Ready', color: cssVar('--faint'), dash: true, values: hrs.map(() => s.readyAt * 100) }] }),
+    h('div', { class: 'sub' }, 'The colours on the body map'),
+    h('div', { class: 'hramp' }, [['Fresh', 0.05, 'under 20%'], ['Recovering', 0.33, '20–45%'], ['Loaded', 0.62, '45–75%'], ['Heavy', 1, 'over 75%']].map(([t, f, r]) => h('div', null, h('i', { style: { background: loadColor(f) } }), h('b', null, t), h('span', null, r)))),
+    h('p', { class: 'note', style: { marginTop: '8px' } }, '100% is roughly one full, hard session for that muscle. Cardio counts too: an easy 30 minute run puts about a third of that on calves and Achilles.'),
+    more(h('p', null, 'Big compound lifts add a little more load per set than isolation work, and heavier sets add more to joints. What a muscle or tendon can take also grows with what it is used to: someone who runs five times a week has an Achilles that copes with more.'),
+      h('p', null, 'This is a model of how recovery tends to go, not a measurement of your tissue. If you feel wrecked and the map says fresh, believe your body. Recovery speeds are editable in Settings.')));
+
+  // 5 ---- weight-adjusted volume
+  const ex = [['30 kg × 20', 600, 300], ['60 kg × 10', 600, 600], ['100 kg × 6', 600, 1000]];
+  const wav = card(5, 'Weight-adjusted volume', 'Plain volume (kg × reps) cannot tell heavy from light. The adjusted number counts heavy sets for more.',
+    h('div', { class: 'sub' }, 'Three sets, same plain volume. Your usual weight here: 60 kg'),
+    legend([{ name: 'Plain volume', color: c1 }, { name: 'Weight-adjusted', color: c2 }]),
+    ex.map(([lab, v, w]) => h('div', { class: 'pair' }, h('span', { class: 'hl' }, lab), h('div', null,
+      h('div', { class: 'pbar' }, h('i', { style: { width: v / 10 + '%', background: c1 } }), h('span', { class: 'num' }, v)),
+      h('div', { class: 'pbar' }, h('i', { style: { width: w / 10 + '%', background: c2 } }), h('span', { class: 'num' }, w))))),
+    h('div', { class: 'formula' }, h('span', { class: 'num' }, 'weight × reps'), h('span', null, '×'), h('span', { class: 'frac num' }, h('span', null, 'weight'), h('span', null, 'your usual weight'))),
+    h('p', { class: 'note' }, `"Usual weight" is your average over the previous ${s.wavSessions} sessions of that exercise. Lift as usual and both numbers match; go heavier and the adjusted one pulls ahead.`),
+    more(h('p', null, 'In Insights, the "What kind of work" chart shows the same idea as zones: heavy (85% of your estimated best or more), moderate (60–85%) and light. How strongly weight counts is adjustable in Settings.')));
+
+  // 6 ---- whole-body load
+  const ls = an.sessions.length ? loadSeries(an, ymd(), ymd()) : [];
+  const ratio = ls.length ? ls[0].ratio : null;
+  const zones = [['Lighter', 0.8, 'var(--l1)'], ['Steady', 1.15, 'var(--good)'], ['Building', 1.5, 'var(--l2)'], ['Spike', 2, 'var(--l4)']];
+  const pos = r => Math.min(100, Math.max(0, r / 2 * 100));
+  const body = card(6, 'Whole-body load', 'Gym sets and cardio become one number. The app compares your last 7 days with what you are used to over 28.',
+    h('div', { class: 'zone', style: { marginTop: '22px' } },
+      zones.map(([t, to, col], i) => h('i', { style: { left: pos(i ? zones[i - 1][1] : 0) + '%', width: (pos(to) - pos(i ? zones[i - 1][1] : 0)) + '%', background: col } })),
+      ratio != null ? h('b', { style: { left: pos(ratio) + '%' } }, h('span', { class: 'num' }, `you: ${Math.round(ratio * 100)}%`)) : null),
+    h('div', { class: 'zonelab' }, zones.map(([t, to], i) => h('span', { style: { left: pos(((i ? zones[i - 1][1] : 0) + to) / 2) + '%' } }, t))),
+    h('div', { class: 'zonelab ticks' }, [[0.8, '80%'], [1.15, '115%'], [1.5, '150%']].map(([v, t]) => h('span', { class: 'num', style: { left: pos(v) + '%' } }, t))),
+    h('p', { class: 'note', style: { marginTop: '6px' } }, 'Above 150% is a sharp jump from your normal. That is when tendons tend to complain, so the app warns you.'),
+    more(h('p', null, 'Researchers disagree on whether this ratio predicts injuries, so the app only uses it as a guard against sudden spikes, not as a forecast.')));
+
+  // 7 ---- pain
+  const seg10 = Array.from({ length: 11 }, (_, n) => n);
+  const pcol = n => n >= 7 ? 'var(--l4)' : n >= s.painAvoid ? 'var(--pain)' : n >= s.painCaution ? 'var(--warn)' : 'var(--raised)';
+  const painC = card(7, 'Pain ratings', 'Rate a joint or tendon from 0 to 10. The planner reacts to your latest rating.',
+    h('div', { class: 'pscale' }, seg10.map(n => h('i', { class: 'num', style: { background: pcol(n), color: n >= s.painCaution ? '#10161d' : 'var(--dim)' } }, n))),
+    h('div', { class: 'hbadge' }, h('span', { class: 'dot', style: { background: 'var(--raised)' } }), h('div', null, h('b', null, `0–${s.painCaution - 1}: train as planned`), h('div', { class: 'note' }, 'Keep an eye on it.'))),
+    h('div', { class: 'hbadge' }, h('span', { class: 'dot', style: { background: 'var(--warn)' } }), h('div', null, h('b', null, `${s.painCaution}–${s.painAvoid - 1}: go easy`), h('div', { class: 'note' }, 'Exercises that load the area are used less and marked "go easy".'))),
+    h('div', { class: 'hbadge' }, h('span', { class: 'dot', style: { background: 'var(--pain)' } }), h('div', null, h('b', null, `${s.painAvoid}–6: left out`), h('div', { class: 'note' }, 'The planner leaves out exercises that load the area. Runs you fixed yourself are flagged, not removed.'))),
+    h('div', { class: 'hbadge' }, h('span', { class: 'dot', style: { background: 'var(--l4)' } }), h('div', null, h('b', null, '7 and up: stop loading it'), h('div', { class: 'note' }, 'Get it looked at if it does not settle.'))),
+    more(h('p', null, 'This follows the pain-monitoring model from Achilles rehab research: discomfort up to about 5/10 during activity is acceptable when it has settled by the next morning and is not creeping up week to week. Until you rate it again, the app assumes it eases by about a point a day. Sharp, one-sided or on-the-bone pain, swelling, or a pop: stop and get it checked. This is a training aid, not medical advice.')));
+
+  const sources = h('div', { class: 'panel prose' }, h('h3', { style: { marginTop: 0 } }, 'Sources'),
+    h('p', null, a('Pelland et al., weekly volume and frequency', 'https://sportrxiv.org/index.php/server/preprint/view/460'), '. ', a('Remmert et al., per-session volume', 'https://sportrxiv.org/index.php/server/preprint/view/537'), '. ', a('Silbernagel et al. 2007, pain-monitoring model', 'https://search.pedro.org.au/search-results/record-detail/18389'), '. ', a('Critique of the acute:chronic workload ratio', 'https://nata.kglmeridian.com/view/journals/attr/55/9/article-p893.xml'), '.'));
+
+  root.appendChild(h('div', { class: 'cols' }, h('div', null, hard, perMuscle, targets, painC), h('div', null, fade, wav, body, sources)));
 }

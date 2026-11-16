@@ -213,8 +213,10 @@ function setRow(s, set, i, opts) {
       set.d = true; save(s); onDone(true);
     } else { set.d = false; save(s); onDone(false); }
   } }, tick());
-  if (block) row.appendChild(h('div', { class: 'bn' }, label));
-  else row.appendChild(h('button', { class: 'n' + (set.f ? ' ' + set.f : ''), title: 'Tap to mark as W warm-up, H hard set, D drop set', 'aria-label': `Set ${i + 1}${set.f === 'w' ? ', warm-up' : set.f === 'h' ? ', counted as a hard set' : set.f === 'd' ? ', drop set' : ''}. Tap to change type`, onClick: () => { set.f = set.f === 'w' ? 'h' : set.f === 'h' ? 'd' : set.f === 'd' ? undefined : 'w'; if (!set.f) delete set.f; save(s); opts.rerender(); } }, set.f === 'w' ? 'W' : set.f === 'h' ? 'H' : set.f === 'd' ? 'D' : String(opts.num ?? i + 1)));
+  const pickType = () => setTypeSheet(set, f => { if (f) set.f = f; else delete set.f; save(s); opts.rerender(); });
+  const typeWord = set.f === 'w' ? ', warm-up' : set.f === 'h' ? ', counted as a hard set' : set.f === 'd' ? ', drop set' : '';
+  if (block) row.appendChild(h('button', { class: 'bn', 'aria-label': `${label}${typeWord}. Change set type`, onClick: pickType }, set.f ? h('em', { class: set.f }, set.f.toUpperCase()) : null, label));
+  else row.appendChild(h('button', { class: 'n' + (set.f ? ' ' + set.f : ''), 'aria-label': `Set ${i + 1}${typeWord}. Change set type`, onClick: pickType }, set.f ? set.f.toUpperCase() : String(opts.num ?? i + 1)));
   row.append(wEl, h('span', { class: 'x' }, '×'), repsEl, okBtn);
   return row;
 }
@@ -253,7 +255,10 @@ function renderItem(s, it, idx, an, ctx) {
       iconBtn('dots', 'More options', menu)));
     const sets = h('div', { class: 'sets' });
     it.rounds.forEach((round, ri) => {
-      sets.appendChild(h('div', { class: 'round' }, `Round ${ri + 1}`, round.every(x => x.d) ? h('span', { class: 'tag good' }, 'done') : null));
+      const warm = round.every(x => x.f === 'w');
+      const roundNo = it.rounds.slice(0, ri + 1).filter(r => !r.every(x => x.f === 'w')).length;
+      sets.appendChild(h('div', { class: 'round' }, warm ? 'Warm-up round' : `Round ${roundNo}`, round.every(x => x.d) ? h('span', { class: 'tag good' }, 'done') : null,
+        h('button', { class: 'wtoggle' + (warm ? ' on' : ''), 'aria-pressed': String(warm), onClick: () => { round.forEach(x => { if (warm) delete x.f; else x.f = 'w'; }); save(s); ctx.refresh(); } }, warm ? 'Warm-up: on' : 'Make warm-up')));
       round.forEach((set, ei) => {
         const ex = getEx(state, it.exIds[ei]);
         sets.appendChild(setRow(s, set, ei, { block: true, label: ex?.name || '?', prev: it.rounds[ri - 1]?.[ei], rerender: () => ctx.refresh(),
@@ -264,6 +269,7 @@ function renderItem(s, it, idx, an, ctx) {
     card.appendChild(sets);
     card.appendChild(h('div', { class: 'xfoot' },
       h('button', { class: 'btn ghost small', onClick: () => { const p = it.rounds[it.rounds.length - 1]; it.rounds.push(it.exIds.map((_, k) => ({ w: p?.[k]?.w ?? null, r: null, ph: p?.[k]?.r ?? p?.[k]?.ph, d: false }))); save(s); ctx.refresh(); } }, icon('plus'), 'Round'),
+      !it.rounds[0]?.every(x => x.f === 'w') ? h('button', { class: 'btn ghost small', onClick: () => { const p = it.rounds[0]; it.rounds.unshift(it.exIds.map((_, k) => ({ w: null, r: null, ph: p?.[k]?.ph ?? p?.[k]?.r, d: false, f: 'w' }))); save(s); ctx.refresh(); toast('Warm-up round added first. It is logged but does not count as hard sets.'); } }, icon('plus'), 'Warm-up') : null,
       it.rounds.length > 1 ? h('button', { class: 'btn ghost small', style: { color: 'var(--dim)' }, onClick: async () => { const p = it.rounds[it.rounds.length - 1]; if (p.some(x => x.d) && !(await confirmSheet('Remove this round?', 'It has sets ticked off.', 'Remove', true))) return; it.rounds.pop(); save(s); ctx.refresh(); } }, 'Remove last') : null));
   } else if (it.k === 'cardio') {
     const ex = getEx(state, it.ex);
@@ -344,7 +350,7 @@ function saveAsPreset(s) {
   for (const it of s.items) {
     if (it.k === 'ex') { const n = it.sets.filter(x => x.f !== 'w').length; if (n) items.push({ k: 'ex', ex: it.ex, sets: n }); }
     else if (it.k === 'cardio') items.push({ k: 'cardio', ex: it.ex, min: it.min || 30, rpe: it.rpe || 4, ...(it.name ? { name: it.name } : {}) });
-    else if (it.k === 'block' && it.block && state.blocks[it.block] && !state.blocks[it.block].deleted) items.push({ k: 'block', block: it.block, rounds: it.rounds.length });
+    else if (it.k === 'block' && it.block && state.blocks[it.block] && !state.blocks[it.block].deleted) items.push({ k: 'block', block: it.block, rounds: Math.max(1, it.rounds.filter(r => !r.every(x => x.f === 'w')).length) });
     else if (it.k === 'block') for (const id of it.exIds) items.push({ k: 'ex', ex: id, sets: it.rounds.length });
   }
   sheet({
@@ -356,4 +362,17 @@ function saveAsPreset(s) {
       put('presets', { id: uid('p'), name: name.trim(), items, plan: true }, 'library'); api.close(); toast('Preset saved');
     } }, 'Save preset')],
   });
+}
+
+/** Choose what kind of set this is. Replaces guessing what a letter means. */
+function setTypeSheet(set, onPick) {
+  const opt = (f, letter, cls, title, text) => h('button', { 'aria-pressed': String((set.f || '') === f), onClick: () => { sh.close(); onPick(f); } },
+    h('span', { class: 'set', style: { padding: 0, display: 'block' } }, h('span', { class: 'n ' + cls, style: { background: 'var(--raised)' } }, letter)),
+    h('span', { class: 'grow' }, h('div', { class: 't' }, title), h('div', { class: 's' }, text)),
+    (set.f || '') === f ? icon('check') : null);
+  const sh = sheet({ title: 'What kind of set?', body: h('div', { class: 'list' },
+    opt('', '1', '', 'Normal', 'The app estimates how hard it was from your recent best.'),
+    opt('w', 'W', 'w', 'Warm-up', 'Logged, but does not count toward hard sets or muscle load.'),
+    opt('h', 'H', 'h', 'Hard', 'Always counts as one full hard set, whatever the estimate says.'),
+    opt('d', 'D', 'd', 'Drop set', 'Counts as at least half a hard set.')) });
 }
