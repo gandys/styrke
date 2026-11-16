@@ -93,6 +93,7 @@ function settings(root, ctx) {
         row('Body weight, kg', 'Used for pull-ups, push-ups and other bodyweight work.', h('div', { style: { width: '84px' } }, numInput(bodyweightAt(state, today), v => { if (v > 20) { put('body', { date: today, kg: v }, 'settings'); setSetting('bodyweight', v); } }, { style: 'text-align:center', 'aria-label': 'Body weight' }))),
         row('Appearance', null, h('div', { style: { width: '160px' } }, seg([{ id: 'dark', name: 'Dark' }, { id: 'light', name: 'Light' }], s.theme, v => { setSetting('theme', v); document.documentElement.dataset.theme = v; ctx.refresh(); }))),
         row('Rest timer', 'Starts when you tick a set. The phone buzzes when rest is over.', toggle(s.restTimer, v => setSetting('restTimer', v), 'Rest timer')),
+        row('Changing a set\'s type', s.setTap === 'cycle' ? 'One tap on the set number steps through normal, W, H, D.' : 'Tapping the set number opens a menu that explains each type.', h('div', { style: { width: '160px' } }, seg([{ id: 'menu', name: 'Menu' }, { id: 'cycle', name: 'One tap' }], s.setTap, v => { setSetting('setTap', v); ctx.refresh(); }))),
         row('Beep when rest is over', 'Plays through the media volume.', toggle(!!s.restSound, v => setSetting('restSound', v), 'Beep when rest is over'))),
       h('div', { class: 'panel' }, h('h2', null, 'Planner'),
         row('Longest session, minutes', 'Change it for a single day in that day\'s sheet.', n('maxMinutes', { min: 15 })),
@@ -280,6 +281,12 @@ function science(root, ctx) {
       h('div', { class: 'pbar' }, h('i', { style: { width: v / 10 + '%', background: c1 } }), h('span', { class: 'num' }, v)),
       h('div', { class: 'pbar' }, h('i', { style: { width: w / 10 + '%', background: c2 } }), h('span', { class: 'num' }, w))))),
     h('div', { class: 'formula' }, h('span', { class: 'num' }, 'weight × reps'), h('span', null, '×'), h('span', { class: 'frac num' }, h('span', null, 'weight'), h('span', null, 'your usual weight'))),
+    h('div', { class: 'sub' }, 'What it is used for, and what not'),
+    h('div', { class: 'feeds' },
+      h('div', null, h('span', null, 'How close to your limit'), icon('right', 16), h('b', null, 'Hard sets'), icon('right', 16), h('span', null, 'Muscle load, weekly targets, planner')),
+      h('div', null, h('span', null, 'Weight against your best'), icon('right', 16), h('b', null, 'Joint load'), icon('right', 16), h('span', null, 'Body map dots, pain-aware planning')),
+      h('div', null, h('span', null, 'Weight against your usual'), icon('right', 16), h('b', null, 'Weight-adjusted volume'), icon('right', 16), h('span', null, 'Insights only'))),
+    h('p', { class: 'note' }, 'So the adjusted number does not colour the body map. It tells you what kind of work you did; hard sets tell the app how much recovery it costs. Insights shows it per muscle too.'),
     h('p', { class: 'note' }, `"Usual weight" is your average over the previous ${s.wavSessions} sessions of that exercise. Lift as usual and both numbers match; go heavier and the adjusted one pulls ahead.`),
     more(h('p', null, 'In Insights, the "What kind of work" chart shows the same idea as zones: heavy (85% of your estimated best or more), moderate (60–85%) and light. How strongly weight counts is adjustable in Settings.')));
 

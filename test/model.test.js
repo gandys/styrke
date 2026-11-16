@@ -220,3 +220,20 @@ test('presets: cardio inside a preset, several presets on one day, plan files th
   const r2 = importPlan({ styrke: 'plan', source: 'marathon', replace: { from: '2027-02-01', to: '2027-02-28' }, sessions: [{ date: '2027-02-06', presets: ['Long run', 'Hip 3'] }] });
   assert.equal(r2.removed, 3 + 6); assert.equal(state.plan['2027-02-06'].items.length, 3);
 });
+
+test('per-muscle volume and load history', async () => {
+  const { loadHistory } = await import('../src/model.js');
+  fresh();
+  const today = ymd();
+  sess(addDays(today, -3), [ex('incline_db_press', [25, 10], [25, 10], [25, 9])]);
+  const an = analyze(state);
+  const d = an.days.get(addDays(today, -3));
+  assert.equal(d.mvol.chest, d.vol); assert.ok(Math.abs(d.mvol.triceps - d.vol * 0.5) < 1e-9);
+  assert.ok(Math.abs(d.mwav.chest - d.wav) < 1e-9);
+  const hist = loadHistory(an, addDays(today, -5), today);
+  assert.equal(hist.length, 6);
+  assert.equal(hist[0].fm.chest, 0); assert.equal(hist[1].fm.chest, 0);
+  assert.ok(hist[2].fm.chest > 0.2, 'loaded on the training day');
+  assert.ok(hist[3].fm.chest < hist[2].fm.chest && hist[5].fm.chest < hist[3].fm.chest, 'fades on rest days');
+  assert.ok(hist[2].fj.shoulder > 0);
+});

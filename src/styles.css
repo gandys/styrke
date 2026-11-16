@@ -329,3 +329,16 @@ table.t td.n, table.t th.n { text-align: right; font-family: var(--num); font-si
 .hmore { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 4px; } .hmore summary { cursor: pointer; color: var(--accent); font-weight: 500; font-size: 14px; min-height: 40px; display: flex; align-items: center; } .hmore .prose p { font-size: 14px; }
 .round .wtoggle { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--faint); min-height: 30px; padding: 0 8px; border-radius: 8px; } .round .wtoggle.on { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
 .bset .bn { text-align: left; } .bset .bn em { font-style: normal; font-family: var(--num); font-weight: 700; margin-right: 5px; } .bset .bn em.w { color: var(--warn); } .bset .bn em.h { color: var(--good); } .bset .bn em.d { color: var(--c3); }
+
+.feeds > div { display: grid; grid-template-columns: 1fr 16px 1fr 16px 1.15fr; gap: 6px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--dim); line-height: 1.25; }
+.feeds > div:last-child { border-bottom: 0; } .feeds b { color: var(--text); font-weight: 600; font-size: 13px; } .feeds svg.ic { width: 16px; height: 16px; color: var(--faint); }
+/* ---------- insights: load over time, balance */
+.lheat { user-select: none; } .lheat .lr { display: grid; grid-template-columns: 92px 1fr; gap: 8px; align-items: center; height: 15px; }
+.lheat .lr span { font-size: 11.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lheat .lc { display: grid; gap: 1px; height: 13px; } .lheat .lc i { display: block; border-radius: 1.5px; } .lheat .lc i.sel { outline: 1.5px solid var(--text); outline-offset: 0; }
+.lheat .lgroup { font-size: 11.5px; font-weight: 600; color: var(--faint); margin: 8px 0 3px; } .lheat .lax { display: grid; grid-template-columns: 92px 1fr; gap: 8px; margin-top: 4px; }
+.lheat .lax div { position: relative; height: 14px; } .lheat .lax b { position: absolute; font-family: var(--num); font-weight: 500; font-size: 11px; color: var(--faint); transform: translateX(-50%); white-space: nowrap; }
+.lpick { min-height: 44px; display: flex; align-items: center; gap: 10px; font-size: 13.5px; margin-top: 8px; padding: 0 12px; border-radius: var(--r-s); background: var(--raised); }
+.lpick i { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.bal { margin: 10px 0 14px; } .bal .bl { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; } .bal .bl b { font-family: var(--num); font-size: 15px; font-weight: 600; margin: 0 5px; }
+.bal .bb { display: flex; height: 12px; gap: 2px; } .bal .bb i { display: block; border-radius: 4px; min-width: 3px; }

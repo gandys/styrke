@@ -213,7 +213,8 @@ function setRow(s, set, i, opts) {
       set.d = true; save(s); onDone(true);
     } else { set.d = false; save(s); onDone(false); }
   } }, tick());
-  const pickType = () => setTypeSheet(set, f => { if (f) set.f = f; else delete set.f; save(s); opts.rerender(); });
+  const applyType = f => { if (f) set.f = f; else delete set.f; save(s); opts.rerender(); };
+  const pickType = () => getSettings(state).setTap === 'cycle' ? applyType({ '': 'w', w: 'h', h: 'd', d: '' }[set.f || '']) : setTypeSheet(set, applyType);
   const typeWord = set.f === 'w' ? ', warm-up' : set.f === 'h' ? ', counted as a hard set' : set.f === 'd' ? ', drop set' : '';
   if (block) row.appendChild(h('button', { class: 'bn', 'aria-label': `${label}${typeWord}. Change set type`, onClick: pickType }, set.f ? h('em', { class: set.f }, set.f.toUpperCase()) : null, label));
   else row.appendChild(h('button', { class: 'n' + (set.f ? ' ' + set.f : ''), 'aria-label': `Set ${i + 1}${typeWord}. Change set type`, onClick: pickType }, set.f ? set.f.toUpperCase() : String(opts.num ?? i + 1)));

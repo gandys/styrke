@@ -19,6 +19,7 @@ export const DEFAULTS = {
   theme: 'dark',
   restTimer: true,
   restSound: false,
+  setTap: 'menu',     // how a set's type is changed: 'menu' (explained choices) or 'cycle' (one tap)
   planBlocksBonus: 1.15,
   targets: {},        // per-muscle overrides {id: {lo, hi}}
   halfLife: {},       // per-muscle / joint overrides in hours
@@ -131,7 +132,7 @@ export function analyze(state) {
 
   const day = date => {
     let d = days.get(date);
-    if (!d) { d = { date, vol: 0, wav: 0, sets: 0, hard: 0, load: 0, zones: { strength: 0, hyper: 0, endur: 0 }, muscles: {}, cardioMin: 0, km: 0, runKm: 0, n: 0 }; days.set(date, d); }
+    if (!d) { d = { date, vol: 0, wav: 0, sets: 0, hard: 0, load: 0, zones: { strength: 0, hyper: 0, endur: 0 }, muscles: {}, mvol: {}, mwav: {}, cardioMin: 0, km: 0, runKm: 0, n: 0 }; days.set(date, d); }
     return d;
   };
 
@@ -197,6 +198,7 @@ export function analyze(state) {
         for (const [m, c] of Object.entries(ex.muscles || {})) {
           if (!MUSCLE[m]) continue;
           d.muscles[m] = (d.muscles[m] || 0) + hard * c;
+          d.mvol[m] = (d.mvol[m] || 0) + st.vol * c; d.mwav[m] = (d.mwav[m] || 0) + st.wav * c;
           ev.muscles[m] = (ev.muscles[m] || 0) + eff * c * (ex.cost || 1);
         }
         for (const [j, c] of Object.entries(ex.joints || {})) {
@@ -234,10 +236,11 @@ export function analyze(state) {
   for (const d of days.values()) {
     const wk = weekStart(d.date);
     let w = weeks.get(wk);
-    if (!w) { w = { week: wk, vol: 0, wav: 0, sets: 0, hard: 0, load: 0, zones: { strength: 0, hyper: 0, endur: 0 }, muscles: {}, cardioMin: 0, km: 0, runKm: 0, days: 0 }; weeks.set(wk, w); }
+    if (!w) { w = { week: wk, vol: 0, wav: 0, sets: 0, hard: 0, load: 0, zones: { strength: 0, hyper: 0, endur: 0 }, muscles: {}, mvol: {}, mwav: {}, cardioMin: 0, km: 0, runKm: 0, days: 0 }; weeks.set(wk, w); }
     w.vol += d.vol; w.wav += d.wav; w.sets += d.sets; w.hard += d.hard; w.load += d.load; w.cardioMin += d.cardioMin; w.km += d.km; w.runKm += d.runKm; w.days++;
     for (const z in d.zones) w.zones[z] += d.zones[z];
     for (const m in d.muscles) w.muscles[m] = (w.muscles[m] || 0) + d.muscles[m];
+    for (const m in d.mvol) { w.mvol[m] = (w.mvol[m] || 0) + d.mvol[m]; w.mwav[m] = (w.mwav[m] || 0) + d.mwav[m]; }
   }
 
   const out = { settings, sessions, days, weeks, events, exHist, allSets, prs };
@@ -268,6 +271,17 @@ export function loadAt(an, t, extra = []) {
   return { muscles, joints, capM, capJ, fm, fj };
 }
 const ADAPT = 3.5;
+
+/** Load on every muscle and joint at the end of each day (23:00, or now for today), as fractions of capacity. */
+export function loadHistory(an, from, to, now = Date.now()) {
+  const out = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    const t = parseYmd(d); t.setHours(23, 0, 0, 0);
+    const l = loadAt(an, Math.min(t.getTime(), now));
+    out.push({ date: d, fm: l.fm, fj: l.fj });
+  }
+  return out;
+}
 
 export const STATUS = [
   { max: 0.2, id: 'fresh', label: 'Fresh' },
