@@ -60,6 +60,7 @@ export function lineChart({ series, labels, height = 180, fmt = v => fmtNum(v), 
       s.values.forEach((v, i) => { if (v == null || isNaN(v)) { return; } d += (pen ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(v).toFixed(1); pen = true; last = i; });
       svg.appendChild(h('path', { d, fill: 'none', stroke: s.color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', 'stroke-dasharray': s.dash ? '5 4' : null }));
       const pts = s.values.filter(v => v != null).length;
+      if (s.dots === false) continue;
       if (pts <= 24) s.values.forEach((v, i) => { if (v != null) svg.appendChild(h('circle', { cx: x(i), cy: y(v), r: 2.6, fill: s.color })); });
       else if (last != null) svg.appendChild(h('circle', { cx: x(last), cy: y(s.values[last]), r: 4, fill: s.color, stroke: 'var(--panel)', 'stroke-width': 2 }));
     }

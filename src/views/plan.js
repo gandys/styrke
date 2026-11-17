@@ -1,10 +1,10 @@
 // Plan: commit to training days on a calendar (up to three months ahead), give days a type or
 // leave them open, and let the planner fill them.
 
-import { h, icon, iconBtn, sheet, toast, confirmSheet, seg, field, numInput, toggle } from '../ui.js';
+import { h, icon, iconBtn, sheet, toast, confirmSheet, seg, field, numInput, toggle, slider } from '../ui.js';
 import { state, put, del, commit, touch, setSetting, sessionsOn } from '../store.js';
-import { analyze, getSettings, muscleTarget, isDeloadWeek, myExercises } from '../model.js';
-import { autoPlan, planMinutes, weekProjection, presetItems, dayPresets } from '../planner.js';
+import { analyze, getSettings, muscleTarget, isDeloadWeek, myExercises, MODES } from '../model.js';
+import { autoPlan, planMinutes, weekProjection, presetItems, dayPresets, PATTERNS, patternDays, patternFromWeek, patternRecord, monthCommitments } from '../planner.js';
 import { MUSCLES, TYPES, TYPE } from '../library.js';
 import { ymd, addDays, parseYmd, weekStart, MONTHS, DOW_SHORT, fmtDate, relDay, diffDays, fmtMin, fmtNum, uid } from '../util.js';
 import { pickExercise, pickBlock, itemLabel, exName, muscleSummary, editBlock, editPreset } from './common.js';
@@ -98,7 +98,10 @@ export function renderPlan(root, ctx) {
     h('div', { class: 'legend', style: { marginTop: '10px' } },
       h('span', null, h('i', { style: { background: 'var(--accent-soft)', boxShadow: 'inset 0 0 0 1.5px var(--accent)' } }), 'Committed'),
       h('span', null, h('i', { style: { background: 'var(--good)', borderRadius: '50%' } }), 'Trained'),
-      h('span', null, h('i', { style: { background: 'var(--c2)' } }), 'Cardio planned')));
+      h('span', null, h('i', { style: { background: 'var(--c2)' } }), 'Cardio planned')),
+    h('div', { class: 'caltools' },
+      h('button', { class: 'btn small', onClick: () => patternSheet(ctx) }, icon('copy', 18), 'Commit a weekly pattern'),
+      monthCommitments(state, curMonth.slice(0, 7), today).length ? h('button', { class: 'btn small ghost', style: { color: 'var(--dim)' }, onClick: () => clearMonthSheet(curMonth.slice(0, 7), ctx) }, `Clear ${MONTHS[m.getMonth()]}…`) : null));
 
   // ---- commitment summary
   const wk = weekStart(today);
@@ -132,6 +135,8 @@ export function renderPlan(root, ctx) {
       (() => { const pool = myExercises(state).filter(e => e.kind === 'strength'); const on = pool.filter(e => e.plan !== false).length; const bl = Object.values(state.blocks).filter(b => !b.deleted && b.plan !== false).length;
         return h('button', { class: 'row', style: { width: '100%', textAlign: 'left', minHeight: '44px' }, onClick: () => poolSheet(ctx) },
           h('span', { class: 'grow' }, 'What the planner may use', h('div', { class: 'note tiny' }, `${on} of ${pool.length} exercises, ${bl} ${bl === 1 ? 'block' : 'blocks'}`)), h('span', { class: 'tag acc' }, 'Choose'), icon('right', 16)); })(),
+      h('button', { class: 'row', style: { width: '100%', textAlign: 'left', minHeight: '44px' }, onClick: () => prioritySheet(ctx) },
+        h('span', { class: 'grow' }, 'Goal and priorities', h('div', { class: 'note tiny' }, prioritySummary(settings))), h('span', { class: 'tag acc' }, 'Adjust'), icon('right', 16)),
       h('div', { class: 'row' }, h('span', { class: 'grow' }, 'Longest session'), h('div', { style: { width: '92px' } }, numInput(settings.maxMinutes, v => { if (v >= 15) setSetting('maxMinutes', v); }, { int: true, 'aria-label': 'Longest session in minutes', style: 'text-align:center' })), h('span', { class: 'dim' }, 'min')),
       h('button', { class: 'btn primary block', disabled: !inRange.length, onClick: () => {
         const n = runAutoPlan(today, to);
@@ -218,7 +223,7 @@ export function openDaySheet(date, ctx) {
         h('div', { class: 'sec' }, 'Workout', items.length ? h('span', { class: 'note', style: { fontWeight: 400 } }, 'about ' + fmtMin(planMinutes(state, items))) : null),
         pd.notes?.length ? h('div', { class: 'banner', style: { fontSize: '13.5px' } }, icon('info'), h('div', null, pd.notes.map(n => h('div', null, n)))) : null,
         items.length ? h('div', null, items.map((it, i) => { const l = itemLabel(it); return h('div', { class: 'plan-item' },
-          h('div', { class: 'grow' }, h('div', { style: { fontWeight: 500 } }, l.name, it.pre && state.presets[it.pre] ? h('span', { class: 'tag acc', style: { marginLeft: '8px' } }, state.presets[it.pre].name) : it.src === 'import' ? h('span', { class: 'tag acc', style: { marginLeft: '8px' } }, it.source || 'imported') : it.src === 'user' ? h('span', { class: 'tag', style: { marginLeft: '8px' } }, 'by hand') : null),
+          h('div', { class: 'grow' }, h('div', { style: { fontWeight: 500 } }, l.name, MODES[it.mode] ? h('span', { class: 'tag ' + MODES[it.mode].tag, style: { marginLeft: '8px' } }, MODES[it.mode].tag) : null, it.pre && state.presets[it.pre] ? h('span', { class: 'tag acc', style: { marginLeft: '8px' } }, state.presets[it.pre].name) : it.src === 'import' ? h('span', { class: 'tag acc', style: { marginLeft: '8px' } }, it.source || 'imported') : it.src === 'user' ? h('span', { class: 'tag', style: { marginLeft: '8px' } }, 'by hand') : null),
             l.sub ? h('div', { class: 'note tiny ell' }, l.sub) : null),
           it.k === 'ex' ? h('div', { style: { width: '58px' } }, numInput(it.sets || 3, v => { it.sets = Math.max(1, v || 1); if (it.src === 'auto') it.src = 'user'; save(); }, { int: true, 'aria-label': 'Sets', style: 'text-align:center;min-height:38px' }))
             : it.k === 'cardio' ? h('div', { style: { width: '58px' } }, numInput(it.min ?? '', v => { it.min = v || undefined; save(); }, { int: true, placeholder: 'min', 'aria-label': 'Minutes', style: 'text-align:center;min-height:38px' })) : h('span', { class: 'q' }, l.q),
@@ -274,5 +279,145 @@ function poolSheet(ctx) {
       ];
     },
     footer: api => [h('button', { class: 'btn primary', onClick: () => api.close() }, 'Done')],
+  });
+}
+
+// ---------- goal and priorities for the automatic planner
+const GOALS = [
+  { id: 'size', name: 'Muscle size', facts: [['8–15', 'reps'], ['near your limit', 'effort'], ['weekly sets', 'what counts']],
+    text: 'Every muscle gets its weekly hard sets, each set ending close to your limit. For growth the number of hard sets matters most; how heavy the weight is matters little.' },
+  { id: 'strength', name: 'Strength', facts: [['3 × 3–6', 'main lifts'], ['80–85%', 'of your best'], ['twice a week', 'per lift']],
+    text: 'Up to three big lifts go first in the session, heavy, with longer rests, and each comes back twice a week when your days allow. The time left builds muscle as usual.' },
+  { id: 'power', name: 'Power', facts: [['4 × 3–5', 'main lifts'], ['about 55%', 'of your best'], ['as fast as you can', 'every rep']],
+    text: 'Up to two big lifts go first, moved fast and stopped well before you tire, and only on fresh muscles. The time left builds muscle as usual.' },
+];
+const SLIDERS = [
+  { key: 'focusBody', name: 'Body focus', left: 'Lower body', right: 'Upper body', stops: ['Lower body', 'Leaning lower', 'Balanced', 'Leaning upper', 'Upper body'],
+    text: v => v === 0 ? 'Weekly targets as you set them.' : `${v > 0 ? 'Upper' : 'Lower'} body targets up ${Math.abs(v) * 15}%, ${v > 0 ? 'lower' : 'upper'} body down ${Math.abs(v) * 15}%. Core stays the same.` },
+  { key: 'focusMix', name: 'Kind of exercises', left: 'Big lifts', right: 'Isolation', stops: ['Big lifts', 'Mostly big lifts', 'Mixed', 'Mostly isolation', 'Isolation'],
+    text: v => v === 0 ? 'A mix of big multi-joint lifts and single-muscle work.' : v < 0 ? 'Prefers big multi-joint lifts: fewer exercises, more muscles trained by each.' : 'Prefers single-muscle exercises: easier on joints and on the whole body, but takes more time.' },
+  { key: 'focusBlocks', name: 'Blocks and supersets', left: 'Straight sets', right: 'More blocks', stops: ['Straight sets', 'Fewer blocks', 'When they fit', 'More blocks', 'Blocks first'],
+    text: v => v === 0 ? 'Uses your blocks when they are the best use of the time.' : v < 0 ? 'Prefers normal sets with full rests. Blocks are used rarely.' : 'Prefers your blocks: more work in less time, with shorter rests.' },
+  { key: 'focusRecovery', name: 'Recovery', left: 'Only when fresh', right: 'Train through', stops: ['Only when fresh', 'Cautious', 'Balanced', 'Push a little', 'Train through'],
+    text: v => v === 0 ? 'Trains a muscle again once most of its load has faded.' : v < 0 ? 'Waits longer before training a muscle again.' : 'Also trains muscles that are still partly loaded. Useful when running keeps your legs loaded most days. Pain ratings are always respected.' },
+];
+function prioritySummary(settings) {
+  const parts = [GOALS.find(g => g.id === settings.planGoal)?.name || 'Muscle size'];
+  for (const sl of SLIDERS) { const v = settings[sl.key] || 0; if (v) parts.push(sl.stops[v + 2].toLowerCase()); }
+  return parts.length === 1 ? parts[0] + ', everything else balanced' : parts.join(', ');
+}
+function prioritySheet(ctx) {
+  sheet({
+    title: 'Goal and priorities',
+    onClose: () => ctx.refresh(),
+    body: api => {
+      const st = getSettings(state);
+      const goal = GOALS.find(g => g.id === st.planGoal) || GOALS[0];
+      const changed = st.planGoal !== 'size' || SLIDERS.some(sl => st[sl.key]);
+      return [
+        h('label', { class: 'f' }, 'What the planner puts first'),
+        seg(GOALS.map(g => ({ id: g.id, name: g.name })), goal.id, v => { setSetting('planGoal', v); api.render(); }),
+        h('div', { class: 'goalbox' },
+          h('div', { class: 'gl' }, goal.facts.map(([v, k]) => h('div', null, v, h('small', null, k)))),
+          h('div', { class: 'dim' }, goal.text)),
+        h('div', { class: 'sec' }, 'Priorities'),
+        SLIDERS.map(sl => {
+          const v = st[sl.key] || 0;
+          const stop = h('span', null, sl.stops[v + 2]), txt = h('div', { class: 'pt' }, sl.text(v));
+          return h('div', { class: 'prio' },
+            h('div', { class: 'ph' }, h('b', null, sl.name), stop),
+            slider(v, nv => { setSetting(sl.key, nv); stop.textContent = sl.stops[nv + 2]; txt.textContent = sl.text(nv); }, { left: sl.left, right: sl.right, label: sl.name, text: nv => sl.stops[nv + 2] }),
+            txt);
+        }),
+        h('p', { class: 'note tiny', style: { marginTop: '4px' } }, 'These change what the planner builds from your exercises. Days you filled by hand, presets and your time limit are always respected. Plan your days again to see the effect.'),
+        changed ? h('button', { class: 'btn small block', style: { marginTop: '12px' }, onClick: () => { setSetting('planGoal', 'size'); for (const sl of SLIDERS) setSetting(sl.key, 0); api.render(); } }, 'Back to muscle size, balanced') : null,
+      ];
+    },
+    footer: api => [h('button', { class: 'btn primary', onClick: () => api.close() }, 'Done')],
+  });
+}
+
+// ---------- commit many days at once from a weekly pattern
+const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+function patternSheet(ctx) {
+  const today = ymd(), limit = addDays(today, HORIZON);
+  const saved = getSettings(state).commitPattern;
+  let pattern = saved && Object.keys(saved).length ? { ...saved } : { ...PATTERNS[0].days };
+  let weeks = 4;
+  const thisWeek = patternFromWeek(state, weekStart(today));
+  const presets = Object.values(state.presets).filter(p => !p.deleted);
+  const same = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
+  sheet({
+    title: 'Commit a weekly pattern',
+    body: api => {
+      const res = patternDays(state, pattern, today, weeks, limit);
+      const starts = [...PATTERNS.map(p => ({ name: p.name, days: p.days })), ...(Object.keys(thisWeek).length ? [{ name: 'Same as this week', days: thisWeek }] : [])];
+      return [
+        h('p', { class: 'note', style: { marginBottom: '12px' } }, 'Choose the weekdays you train and what each one is for. Those days are committed for the weeks ahead in one go. You can still tap any single day on the calendar to change or remove it.'),
+        h('label', { class: 'f' }, 'Start from'),
+        h('div', { class: 'chips' }, starts.map(p => h('button', { class: 'chip' + (same(p.days, pattern) ? ' on' : ''), onClick: () => { pattern = { ...p.days }; api.render(); } }, p.name))),
+        h('div', { class: 'sec' }, 'Your week'),
+        WEEKDAYS.map((name, i) => h('div', { class: 'wdrow' + (pattern[i] ? ' on' : '') }, h('span', null, name),
+          h('select', { 'aria-label': name, onChange: e => { if (e.target.value) pattern[i] = e.target.value; else delete pattern[i]; api.render(); } },
+            h('option', { value: '', selected: !pattern[i] }, 'Not training'),
+            TYPES.filter(t => t.id !== 'rest' && t.id !== 'custom').map(t => h('option', { value: t.id, selected: pattern[i] === t.id }, t.id === 'auto' ? 'Planner decides' : t.name)),
+            presets.map(p => h('option', { value: 'preset:' + p.id, selected: pattern[i] === 'preset:' + p.id }, 'Preset: ' + p.name))))),
+        h('label', { class: 'f', style: { marginTop: '14px' } }, 'For how long'),
+        seg([{ id: 2, name: '2 weeks' }, { id: 4, name: '4 weeks' }, { id: 8, name: '8 weeks' }, { id: 13, name: '3 months' }], weeks, v => { weeks = v; api.render(); }),
+        h('div', { class: 'banner info', style: { marginTop: '14px', marginBottom: 0 } }, icon('info'),
+          h('div', null, res.add.length ? h('b', null, `Commits ${res.add.length} ${res.add.length === 1 ? 'day' : 'days'}, ${fmtDate(res.add[0].date)} to ${fmtDate(res.add[res.add.length - 1].date)}. `) : h('b', null, Object.keys(pattern).length ? 'Nothing new to commit. ' : 'Pick at least one weekday. '),
+            res.kept.length ? `${res.kept.length} ${res.kept.length === 1 ? 'day is' : 'days are'} already committed and ${res.kept.length === 1 ? 'stays' : 'stay'} as ${res.kept.length === 1 ? 'it is' : 'they are'}.` : '')),
+      ];
+    },
+    footer: api => {
+      const res = patternDays(state, pattern, today, weeks, limit);
+      return [h('button', { class: 'btn', onClick: () => api.close() }, 'Cancel'),
+        h('button', { class: 'btn primary', disabled: !res.add.length, onClick: () => {
+          const dates = [];
+          for (const d of res.add) { state.plan[d.date] = touch(patternRecord(state, d)); dates.push(d.date); }
+          state.settings.commitPattern = { ...pattern }; state.settings._u = Date.now();
+          commit('plan'); api.close(); curMonth = dates[0].slice(0, 7) + '-01'; ctx.refresh();
+          toast(`Committed ${dates.length} ${dates.length === 1 ? 'day' : 'days'}`, { label: 'Undo', fn: () => { for (const d of dates) del('plan', d, 'plan'); ctx.refresh(); } });
+        } }, res.add.length ? `Commit ${res.add.length} ${res.add.length === 1 ? 'day' : 'days'}` : 'Commit')];
+    },
+  });
+}
+
+// ---------- clear a whole month of commitments. Deliberately slow: you have to type the month's name.
+function clearMonthSheet(month, ctx) {
+  const today = ymd();
+  const name = MONTHS[parseYmd(month + '-01').getMonth()];
+  const days = monthCommitments(state, month, today);
+  if (!days.length) return;
+  const filled = days.filter(p => p.items?.length).length;
+  const imported = days.filter(p => (p.items || []).some(i => i.src === 'import')).length;
+  const byHand = days.filter(p => (p.items || []).some(i => i.src === 'user' || i.pre)).length;
+  let typed = '';
+  const ok = () => typed.trim().toLowerCase() === name.toLowerCase();
+  sheet({
+    title: `Clear ${name}?`,
+    body: api => [
+      h('div', { class: 'dangerbox' },
+        h('h3', null, icon('warn', 20), `This removes ${days.length} committed ${days.length === 1 ? 'day' : 'days'}`),
+        h('div', null, `${fmtDate(days[0].date)}${days.length > 1 ? ' to ' + fmtDate(days[days.length - 1].date) : ''}, with everything planned on ${days.length === 1 ? 'it' : 'them'}.`),
+        h('ul', null,
+          filled ? h('li', null, `${filled} ${filled === 1 ? 'has a workout' : 'have workouts'} filled in`) : null,
+          byHand ? h('li', null, `${byHand} with presets or items you added by hand`) : null,
+          imported ? h('li', null, `${imported} with sessions from an imported plan (runs, for example)`) : null,
+          h('li', null, 'Workouts you already logged are not touched'),
+          month === today.slice(0, 7) ? h('li', null, 'Days before today stay as they are') : null)),
+      h('label', { class: 'f', style: { marginTop: '16px' } }, `To confirm, type the month: ${name.toLowerCase()}`),
+      h('input', { type: 'text', autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'done', placeholder: name.toLowerCase(), 'aria-label': `Type ${name} to confirm`,
+        onInput: e => { typed = e.target.value; const b = api.el.querySelector('.destroy'); if (b) { b.disabled = !ok(); b.toggleAttribute('disabled', !ok()); } } }),
+      h('p', { class: 'note tiny', style: { marginTop: '8px' } }, 'To remove a single day instead, tap it on the calendar and choose Remove day.'),
+    ],
+    footer: api => [h('button', { class: 'btn primary', onClick: () => api.close() }, 'Keep my plan'),
+      h('button', { class: 'btn destroy', disabled: true, onClick: () => {
+        if (!ok()) return;
+        const copies = days.map(p => JSON.parse(JSON.stringify(p)));
+        for (const p of days) state.plan[p.date] = { date: p.date, deleted: true, u: Date.now() };
+        commit('plan'); api.close(); ctx.refresh();
+        toast(`Cleared ${days.length} ${days.length === 1 ? 'day' : 'days'} in ${name}`, { label: 'Undo', fn: () => { for (const c of copies) state.plan[c.date] = touch(c); commit('plan'); ctx.refresh(); } });
+      } }, `Clear ${days.length} ${days.length === 1 ? 'day' : 'days'}`)],
   });
 }

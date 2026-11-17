@@ -2,7 +2,7 @@
 
 import { h, icon, iconBtn, sheet, toast, confirmSheet, seg, field, toggle, numInput } from '../ui.js';
 import { state, local, saveLocal, put, del, commit, setSetting, exportJson, exportCsv, importJson, listSnapshots, restoreSnapshot, saveStatus, _reset, flush } from '../store.js';
-import { analyze, allExercises, getSettings, DEFAULTS, muscleTarget, halfLife, bodyweightAt, loadSeries } from '../model.js';
+import { analyze, allExercises, getSettings, DEFAULTS, muscleTarget, baseTarget, halfLife, bodyweightAt, loadSeries } from '../model.js';
 import { lineChart, legend, cssVar } from '../charts.js';
 import { loadColor } from '../bodymap.js';
 import { MUSCLES, JOINTS, MUSCLE } from '../library.js';
@@ -109,9 +109,9 @@ function settings(root, ctx) {
         row('"Usual weight" looks back', 'Average over this many previous sessions of the exercise.', h('div', { class: 'row' }, n('wavSessions', { min: 1 }), h('span', { class: 'dim' }, 'sessions'))))),
     h('div', null,
       h('div', { class: 'panel' }, h('h2', null, 'Weekly targets and recovery speed'),
-        h('p', { class: 'note', style: { marginBottom: '8px' } }, 'Target = hard sets per week (helper work counts half). Half-life = hours of rest for the load on that muscle to halve; lower means it bounces back faster.'),
+        h('p', { class: 'note', style: { marginBottom: '8px' } }, 'Target = hard sets per week (helper work counts half). Half-life = hours of rest for the load on that muscle to halve; lower means it bounces back faster.', s.focusBody ? ` Your planner body focus currently shifts these targets ${Math.abs(s.focusBody) * 15}% toward the ${s.focusBody > 0 ? 'upper' : 'lower'} body.` : ''),
         h('div', { class: 'mrow', style: { gridTemplateColumns: '1fr 60px 60px 66px', minHeight: '24px' } }, h('span'), h('span', { class: 'note tiny', style: { textAlign: 'center' } }, 'from'), h('span', { class: 'note tiny', style: { textAlign: 'center' } }, 'to'), h('span', { class: 'note tiny', style: { textAlign: 'center' } }, 'half-life')),
-        MUSCLES.map(m => { const t = muscleTarget(s, m.id); const setT = (k, v) => { const tg = { ...(state.settings.targets || {}) }; tg[m.id] = { ...muscleTarget(getSettings(state), m.id), [k]: v }; setSetting('targets', tg); };
+        MUSCLES.map(m => { const t = baseTarget(s, m.id); const setT = (k, v) => { const tg = { ...(state.settings.targets || {}) }; tg[m.id] = { ...baseTarget(getSettings(state), m.id), [k]: v }; setSetting('targets', tg); };
           const inp = (val, fn, lab) => numInput(val, v => { if (v != null && v >= 0) fn(v); }, { int: true, style: 'text-align:center;min-height:38px;padding:0 2px', 'aria-label': `${m.name} ${lab}` });
           return h('div', { class: 'mrow', style: { gridTemplateColumns: '1fr 60px 60px 66px' } }, h('span', { class: 'nm' }, m.name), inp(t.lo, v => setT('lo', v), 'target from'), inp(t.hi, v => setT('hi', v), 'target to'), inp(halfLife(s, m.id), v => { if (v >= 4) setSetting('halfLife', { ...(state.settings.halfLife || {}), [m.id]: v }); }, 'half-life in hours')); }),
         h('div', { class: 'sec' }, 'Joints and tendons'),
@@ -231,6 +231,7 @@ function science(root, ctx) {
     badge('W', 'w', 'Warm-up', 'Logged, but never counts.'),
     badge('H', 'h', 'Hard', 'Always counts as one full set.'),
     badge('D', 'd', 'Drop set', 'Counts as at least half a set.'),
+    badge('P', 'p', 'Fast', 'A power set: moved fast, stopped early. Counts only as far as the estimate says, which is little.'),
     more(h('p', null, 'The app compares each set with your estimated best for that exercise (from your recent sessions) and works out how many more reps you could have done. Up to 4 reps left counts in full, fading to nothing at 10 left. The estimate cannot see everything: a light set late in a circuit can be hard. That is what H is for.')));
 
   // 2 ---- sets per muscle
@@ -262,7 +263,7 @@ function science(root, ctx) {
   // 4 ---- load fades
   const hrs = []; for (let t = 0; t <= 96; t += 4) hrs.push(t);
   const dec = id => hrs.map(t => 100 * Math.pow(0.5, t / halfLife(s, id)));
-  const fade = card(4, 'Load fades while you rest', 'Training puts load on a muscle. Rest halves it at a steady pace: fast for small muscles, slow for legs and tendons.',
+  const fade = card(6, 'Load fades while you rest', 'Training puts load on a muscle. Rest halves it at a steady pace: fast for small muscles, slow for legs and tendons.',
     legend([{ name: `Biceps (halves in ${halfLife(s, 'biceps')} h)`, color: c1 }, { name: `Quads (${halfLife(s, 'quads')} h)`, color: c2 }, { name: `Achilles (${halfLife(s, 'achilles')} h)`, color: c3 }, { name: 'Ready again', color: 'var(--faint)', dash: true }]),
     lineChart({ labels: hrs.map(t => t % 24 === 0 ? (t === 0 ? 'now' : `+${t / 24} d`) : `+${t} h`), unit: '%', height: 170, fmt: v => fmtNum(v),
       series: [{ name: 'Biceps', color: c1, values: dec('biceps') }, { name: 'Quads', color: c2, values: dec('quads') }, { name: 'Achilles', color: c3, values: dec('achilles') }, { name: 'Ready', color: cssVar('--faint'), dash: true, values: hrs.map(() => s.readyAt * 100) }] }),
@@ -274,7 +275,7 @@ function science(root, ctx) {
 
   // 5 ---- weight-adjusted volume
   const ex = [['30 kg × 20', 600, 300], ['60 kg × 10', 600, 600], ['100 kg × 6', 600, 1000]];
-  const wav = card(5, 'Weight-adjusted volume', 'Plain volume (kg × reps) cannot tell heavy from light. The adjusted number counts heavy sets for more.',
+  const wav = card(7, 'Weight-adjusted volume', 'Plain volume (kg × reps) cannot tell heavy from light. The adjusted number counts heavy sets for more.',
     h('div', { class: 'sub' }, 'Three sets, same plain volume. Your usual weight here: 60 kg'),
     legend([{ name: 'Plain volume', color: c1 }, { name: 'Weight-adjusted', color: c2 }]),
     ex.map(([lab, v, w]) => h('div', { class: 'pair' }, h('span', { class: 'hl' }, lab), h('div', null,
@@ -285,17 +286,34 @@ function science(root, ctx) {
     h('div', { class: 'feeds' },
       h('div', null, h('span', null, 'How close to your limit'), icon('right', 16), h('b', null, 'Hard sets'), icon('right', 16), h('span', null, 'Muscle load, weekly targets, planner')),
       h('div', null, h('span', null, 'Weight against your best'), icon('right', 16), h('b', null, 'Joint load'), icon('right', 16), h('span', null, 'Body map dots, pain-aware planning')),
+      h('div', null, h('span', null, 'Weight against your best'), icon('right', 16), h('b', null, 'Heavy sets'), icon('right', 16), h('span', null, 'Strength stimulus in Insights')),
       h('div', null, h('span', null, 'Weight against your usual'), icon('right', 16), h('b', null, 'Weight-adjusted volume'), icon('right', 16), h('span', null, 'Insights only'))),
-    h('p', { class: 'note' }, 'So the adjusted number does not colour the body map. It tells you what kind of work you did; hard sets tell the app how much recovery it costs. Insights shows it per muscle too.'),
+    h('p', { class: 'note' }, 'So the adjusted number does not colour the body map. It tells you what kind of work you did; hard sets tell the app how much recovery it costs. Insights shows it per muscle too. Read it as a strength signal: for muscle size, a large review found that the weight on the bar matters little once sets are hard.'),
     h('p', { class: 'note' }, `"Usual weight" is your average over the previous ${s.wavSessions} sessions of that exercise. Lift as usual and both numbers match; go heavier and the adjusted one pulls ahead.`),
-    more(h('p', null, 'In Insights, the "What kind of work" chart shows the same idea as zones: heavy (85% of your estimated best or more), moderate (60–85%) and light. How strongly weight counts is adjustable in Settings.')));
+    more(h('p', null, 'In Insights, the "What kind of work" chart shows the same idea as zones: heavy (80% of your estimated best or more), moderate (60–80%) and light. How strongly weight counts is adjustable in Settings.')));
+
+  // 8 ---- three kinds of stimulus, and the planner goal
+  const pctBar = (lab, from, to, color, right) => h('div', { class: 'hrow', style: { gridTemplateColumns: '66px 1fr 62px' } }, h('span', { class: 'hl' }, lab),
+    h('div', { class: 'bar', style: { height: '12px', borderRadius: '6px', position: 'relative' } }, h('i', { style: { position: 'absolute', left: from + '%', width: (to - from) + '%', top: 0, bottom: 0, background: color, borderRadius: '6px' } })), h('span', { class: 'hv num' }, right));
+  const goalNow = { size: 'Muscle size', strength: 'Strength', power: 'Power' }[s.planGoal] || 'Muscle size';
+  const stim = card(4, 'Size, strength and power', 'One set can do three different jobs. The app counts each one separately, and the planner goal decides which comes first.',
+    h('div', { class: 'sub' }, 'What weight each job needs, as a share of your best single lift'),
+    pctBar('Size', 30, 100, c1, '30–100%'), pctBar('Strength', 80, 100, c3, '80%+'), pctBar('Power', 30, 70, c2, '30–70%'),
+    h('div', { class: 'zonelab ticks', style: { margin: '0 72px 0 76px', position: 'relative', height: '16px' } }, [[0, '0'], [50, '50%'], [100, '100%']].map(([v, t]) => h('span', { class: 'num', style: { left: v + '%' } }, t))),
+    h('div', { class: 'hbadge' }, h('span', { class: 'dot', style: { background: c1 } }), h('div', null, h('b', null, 'Size: hard sets'), h('div', { class: 'note' }, 'Any weight works if the set ends close to your limit. What counts is how many such sets a muscle gets each week.'))),
+    h('div', { class: 'hbadge' }, h('span', { class: 'dot', style: { background: c3 } }), h('div', null, h('b', null, 'Strength: heavy sets'), h('div', { class: 'note' }, 'Sets at 80% or more of your estimated best (from 75% they count in part). 2–3 sets a session, each lift twice a week, early in the session.'))),
+    h('div', { class: 'hbadge' }, h('span', { class: 'dot', style: { background: c2 } }), h('div', null, h('b', null, 'Power: fast sets'), h('div', { class: 'note' }, 'A moderate weight moved as fast as you can, few reps, stopped long before you tire. Mark these sets P.'))),
+    h('p', { class: 'note', style: { marginTop: '8px' } }, `Your planner goal is ${goalNow}. Change it under Plan, Goal and priorities. Insights shows size and strength stimulus week by week.`),
+    more(h('p', null, 'This follows the 2026 position stand of the American College of Sports Medicine, which pooled 137 reviews. It found that muscle growth depends mainly on weekly sets and not on the weight used (30% to 100% of your best), that maximal strength needs heavy weights, and that power is best trained with moderate weights moved fast and little total work. Training to failure added nothing for any of the three.'),
+      h('p', null, 'The same review found no clear benefit from planned variation of the programme, from particular rest lengths, or from machines against free weights. So the app does not track those.'),
+      h('p', null, 'What the review does not cover: how fast each muscle recovers, joint load and pain. Those parts of the app are reasoned estimates you can adjust in Settings.')));
 
   // 6 ---- whole-body load
   const ls = an.sessions.length ? loadSeries(an, ymd(), ymd()) : [];
   const ratio = ls.length ? ls[0].ratio : null;
   const zones = [['Lighter', 0.8, 'var(--l1)'], ['Steady', 1.15, 'var(--good)'], ['Building', 1.5, 'var(--l2)'], ['Spike', 2, 'var(--l4)']];
   const pos = r => Math.min(100, Math.max(0, r / 2 * 100));
-  const body = card(6, 'Whole-body load', 'Gym sets and cardio become one number. The app compares your last 7 days with what you are used to over 28.',
+  const body = card(8, 'Whole-body load', 'Gym sets and cardio become one number. The app compares your last 7 days with what you are used to over 28.',
     h('div', { class: 'zone', style: { marginTop: '22px' } },
       zones.map(([t, to, col], i) => h('i', { style: { left: pos(i ? zones[i - 1][1] : 0) + '%', width: (pos(to) - pos(i ? zones[i - 1][1] : 0)) + '%', background: col } })),
       ratio != null ? h('b', { style: { left: pos(ratio) + '%' } }, h('span', { class: 'num' }, `you: ${Math.round(ratio * 100)}%`)) : null),
@@ -307,7 +325,7 @@ function science(root, ctx) {
   // 7 ---- pain
   const seg10 = Array.from({ length: 11 }, (_, n) => n);
   const pcol = n => n >= 7 ? 'var(--l4)' : n >= s.painAvoid ? 'var(--pain)' : n >= s.painCaution ? 'var(--warn)' : 'var(--raised)';
-  const painC = card(7, 'Pain ratings', 'Rate a joint or tendon from 0 to 10. The planner reacts to your latest rating.',
+  const painC = card(5, 'Pain ratings', 'Rate a joint or tendon from 0 to 10. The planner reacts to your latest rating.',
     h('div', { class: 'pscale' }, seg10.map(n => h('i', { class: 'num', style: { background: pcol(n), color: n >= s.painCaution ? '#10161d' : 'var(--dim)' } }, n))),
     h('div', { class: 'hbadge' }, h('span', { class: 'dot', style: { background: 'var(--raised)' } }), h('div', null, h('b', null, `0–${s.painCaution - 1}: train as planned`), h('div', { class: 'note' }, 'Keep an eye on it.'))),
     h('div', { class: 'hbadge' }, h('span', { class: 'dot', style: { background: 'var(--warn)' } }), h('div', null, h('b', null, `${s.painCaution}–${s.painAvoid - 1}: go easy`), h('div', { class: 'note' }, 'Exercises that load the area are used less and marked "go easy".'))),
@@ -316,7 +334,7 @@ function science(root, ctx) {
     more(h('p', null, 'This follows the pain-monitoring model from Achilles rehab research: discomfort up to about 5/10 during activity is acceptable when it has settled by the next morning and is not creeping up week to week. Until you rate it again, the app assumes it eases by about a point a day. Sharp, one-sided or on-the-bone pain, swelling, or a pop: stop and get it checked. This is a training aid, not medical advice.')));
 
   const sources = h('div', { class: 'panel prose' }, h('h3', { style: { marginTop: 0 } }, 'Sources'),
-    h('p', null, a('Pelland et al., weekly volume and frequency', 'https://sportrxiv.org/index.php/server/preprint/view/460'), '. ', a('Remmert et al., per-session volume', 'https://sportrxiv.org/index.php/server/preprint/view/537'), '. ', a('Silbernagel et al. 2007, pain-monitoring model', 'https://search.pedro.org.au/search-results/record-detail/18389'), '. ', a('Critique of the acute:chronic workload ratio', 'https://nata.kglmeridian.com/view/journals/attr/55/9/article-p893.xml'), '.'));
+    h('p', null, a('Currier et al. 2026, ACSM position stand on resistance training', 'https://journals.lww.com/acsm-msse/'), '. ', a('Pelland et al., weekly volume and frequency', 'https://sportrxiv.org/index.php/server/preprint/view/460'), '. ', a('Remmert et al., per-session volume', 'https://sportrxiv.org/index.php/server/preprint/view/537'), '. ', a('Silbernagel et al. 2007, pain-monitoring model', 'https://search.pedro.org.au/search-results/record-detail/18389'), '. ', a('Critique of the acute:chronic workload ratio', 'https://nata.kglmeridian.com/view/journals/attr/55/9/article-p893.xml'), '.'));
 
-  root.appendChild(h('div', { class: 'cols' }, h('div', null, hard, perMuscle, targets, painC), h('div', null, fade, wav, body, sources)));
+  root.appendChild(h('div', { class: 'cols' }, h('div', null, hard, perMuscle, targets, stim, painC), h('div', null, fade, wav, body, sources)));
 }

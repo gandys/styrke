@@ -21,6 +21,11 @@ export const DEFAULTS = {
   restSound: false,
   setTap: 'menu',     // how a set's type is changed: 'menu' (explained choices) or 'cycle' (one tap)
   planBlocksBonus: 1.15,
+  planGoal: 'size',   // what the planner puts first: 'size' | 'strength' | 'power'
+  focusBody: 0,       // -2 lower body .. 0 balanced .. +2 upper body
+  focusMix: 0,        // -2 big lifts .. +2 isolation work
+  focusBlocks: 0,     // -2 straight sets .. +2 as many blocks as fit
+  focusRecovery: 0,   // -2 only train fresh muscles .. +2 train through fatigue
   targets: {},        // per-muscle overrides {id: {lo, hi}}
   halfLife: {},       // per-muscle / joint overrides in hours
   deloadAnchor: null, // Monday of a known deload week
@@ -30,9 +35,24 @@ export function getSettings(state) {
   return { ...DEFAULTS, ...(state.settings || {}) };
 }
 
-export function muscleTarget(settings, id) {
+/** The weekly target as set (built-in or your own number), before any body focus. */
+export function baseTarget(settings, id) {
   const o = settings.targets && settings.targets[id];
   return { lo: o?.lo ?? MUSCLE[id].lo, hi: o?.hi ?? MUSCLE[id].hi };
+}
+
+/** How much the body-focus slider scales a muscle's weekly target: up to 30% either way. */
+export function focusFactor(settings, id) {
+  const v = clamp(settings.focusBody || 0, -2, 2), g = MUSCLE[id]?.group;
+  return g === 'upper' ? 1 + 0.15 * v : g === 'lower' ? 1 - 0.15 * v : 1;
+}
+
+/** The weekly target the app works to: the base target shifted by the body focus. */
+export function muscleTarget(settings, id) {
+  const b = baseTarget(settings, id), f = focusFactor(settings, id);
+  if (f === 1) return b;
+  const lo = Math.round(b.lo * f);
+  return { lo, hi: Math.max(lo, Math.round(b.hi * f)) };
 }
 
 export function halfLife(settings, id) {
@@ -86,6 +106,11 @@ export function hardnessFromRir(rir) {
   return clamp(1 - (rir - 4) / 6, 0, 1);
 }
 
+/** Strength stimulus of a set from how heavy it was against your estimated best: nothing up to 75%, full from 80%. */
+export function strengthCredit(pct) {
+  return clamp((pct - 0.75) / 0.05, 0, 1);
+}
+
 /** Session timestamp (ms). Uses the recorded start time if present, otherwise 18:00 on the day. */
 export function sessionTime(s) {
   if (s.start) return s.start;
@@ -99,7 +124,7 @@ export function flatten(session) {
   let order = 0;
   for (const it of session.items || []) {
     if (it.k === 'ex') {
-      for (const s of it.sets || []) if (s.d && s.r > 0) sets.push({ ex: it.ex, w: s.w || 0, r: s.r, rir: s.rir, f: s.f, order: order++ });
+      for (const s of it.sets || []) if (s.d && s.r > 0) sets.push({ ex: it.ex, w: s.w || 0, r: s.r, rir: s.rir, f: s.f, mode: it.mode, order: order++ });
     } else if (it.k === 'block') {
       for (const round of it.rounds || []) {
         round.forEach((s, i) => { if (s && s.d && s.r > 0) sets.push({ ex: it.exIds[i], w: s.w || 0, r: s.r, rir: s.rir, f: s.f, order: order++, block: it.name || true }); });
@@ -132,7 +157,7 @@ export function analyze(state) {
 
   const day = date => {
     let d = days.get(date);
-    if (!d) { d = { date, vol: 0, wav: 0, sets: 0, hard: 0, load: 0, zones: { strength: 0, hyper: 0, endur: 0 }, muscles: {}, mvol: {}, mwav: {}, cardioMin: 0, km: 0, runKm: 0, n: 0 }; days.set(date, d); }
+    if (!d) { d = { date, vol: 0, wav: 0, sets: 0, hard: 0, str: 0, pow: 0, mstr: {}, load: 0, zones: { strength: 0, hyper: 0, endur: 0 }, muscles: {}, mvol: {}, mwav: {}, cardioMin: 0, km: 0, runKm: 0, n: 0 }; days.set(date, d); }
     return d;
   };
 
@@ -150,10 +175,11 @@ export function analyze(state) {
       const ex = getEx(state, exId) || { id: exId, name: exId, kind: 'strength', muscles: {}, joints: {}, cost: 1 };
       const hist = exHist.get(exId) || [];
       // -- references from previous sessions
-      const recent = hist.slice(-6);
+      const refHist = hist.filter(h => !h.noRef);
+      const recent = refHist.slice(-6);
       const priorE = recent.length ? Math.max(...recent.map(h => h.best)) : 0;
       const priorReps = recent.length ? Math.max(...recent.map(h => h.maxReps)) : 0;
-      const wavPrev = hist.slice(-settings.wavSessions);
+      const wavPrev = refHist.slice(-settings.wavSessions);
       let refW = 0;
       if (wavPrev.length) {
         let a = 0, b = 0;
@@ -165,14 +191,16 @@ export function analyze(state) {
       for (const st of list) {
         st.load = effLoad(ex, st.w, bwKg);
         st.e1 = st.load > 0 ? epley(st.load, st.r) : 0;
-        if (st.f !== 'w') { best = Math.max(best, st.e1); maxReps = Math.max(maxReps, st.r); loadReps += st.load * st.r; reps += st.r; }
+        // warm-ups and fast (power) sets stop far short of your limit, so they say nothing about your best
+        if (st.f !== 'w' && st.f !== 'p') { best = Math.max(best, st.e1); maxReps = Math.max(maxReps, st.r); loadReps += st.load * st.r; reps += st.r; }
       }
-      if (!reps) for (const st of list) { best = Math.max(best, st.e1); maxReps = Math.max(maxReps, st.r); loadReps += st.load * st.r; reps += st.r; }
+      const noRef = !reps;   // only warm-ups or fast sets: no new estimate of your best from this session
+      if (noRef) for (const st of list) { best = Math.max(best, st.e1); maxReps = Math.max(maxReps, st.r); loadReps += st.load * st.r; reps += st.r; }
       const refE = Math.max(best, 0.92 * priorE);
       const refReps = Math.max(maxReps, 0.92 * priorReps);
       if (!refW) refW = reps ? loadReps / reps : 0;
 
-      let sVol = 0, sWav = 0, sHard = 0, top = null;
+      let sVol = 0, sWav = 0, sHard = 0, sStr = 0, top = null;
       for (const st of list) {
         // effort
         let hard;
@@ -186,10 +214,14 @@ export function analyze(state) {
         if (st.f === 'h') hard = 1;
         st.hard = hard;
         st.pct = st.load > 0 && refE > 0 ? Math.min(1.05, st.load / refE) : 0.6;
-        st.zone = st.load > 0 && refE > 0 ? (st.pct >= 0.85 ? 'strength' : st.pct >= 0.6 ? 'hyper' : 'endur') : (st.r <= 5 ? 'strength' : st.r <= 20 ? 'hyper' : 'endur');
+        st.zone = st.load > 0 && refE > 0 ? (st.pct >= 0.8 ? 'strength' : st.pct >= 0.6 ? 'hyper' : 'endur') : (st.r <= 5 ? 'strength' : st.r <= 20 ? 'hyper' : 'endur');
         st.vol = st.load * st.r;
         st.wav = refW > 0 ? st.vol * Math.pow(st.load / refW, settings.wavPower) : st.vol;
         st.date = s.date; st.sid = s.id;
+        // three kinds of stimulus: size = hard sets, strength = heavy sets, power = sets moved fast
+        st.str = st.f === 'w' || st.f === 'p' || !(st.load > 0 && refE > 0) ? 0 : strengthCredit(st.pct);
+        st.pow = st.f === 'p' ? 1 : 0;
+        sStr += st.str; d.str += st.str; d.pow += st.pow;
         sVol += st.vol; sWav += st.wav; sHard += hard;
         if (!top || st.load > top.load || (st.load === top.load && st.r > top.r)) top = st;
         d.vol += st.vol; d.wav += st.wav; d.sets++; d.hard += hard; d.zones[st.zone] += st.vol;
@@ -198,6 +230,7 @@ export function analyze(state) {
         for (const [m, c] of Object.entries(ex.muscles || {})) {
           if (!MUSCLE[m]) continue;
           d.muscles[m] = (d.muscles[m] || 0) + hard * c;
+          if (st.str) d.mstr[m] = (d.mstr[m] || 0) + st.str * c;
           d.mvol[m] = (d.mvol[m] || 0) + st.vol * c; d.mwav[m] = (d.mwav[m] || 0) + st.wav * c;
           ev.muscles[m] = (ev.muscles[m] || 0) + eff * c * (ex.cost || 1);
         }
@@ -209,9 +242,9 @@ export function analyze(state) {
         ev.sys += sys; d.load += sys;
         allSets.push(st);
       }
-      const rec = { date: s.date, sid: s.id, best, maxReps, loadReps, reps, vol: sVol, wav: sWav, hard: sHard, top: top && { w: top.w, r: top.r, load: top.load }, sets: list.map(x => ({ w: x.w, r: x.r, hard: x.hard, f: x.f })) };
+      const rec = { date: s.date, sid: s.id, mode: list[0].mode, best: noRef ? 0 : best, maxReps, loadReps, reps, noRef, vol: sVol, wav: sWav, hard: sHard, str: sStr, top: top && { w: top.w, r: top.r, load: top.load }, sets: list.map(x => ({ w: x.w, r: x.r, hard: x.hard, f: x.f })) };
       // PR detection (estimated 1RM), ignoring the very first session of an exercise
-      if (hist.length >= 2 && best > 0) {
+      if (hist.length >= 2 && best > 0 && !noRef) {
         const prevBest = Math.max(...hist.map(h => h.best));
         if (best > prevBest * 1.001) { rec.pr = true; prs.push({ date: s.date, ex: exId, e1: best, prev: prevBest, top: rec.top }); }
       }
@@ -236,10 +269,11 @@ export function analyze(state) {
   for (const d of days.values()) {
     const wk = weekStart(d.date);
     let w = weeks.get(wk);
-    if (!w) { w = { week: wk, vol: 0, wav: 0, sets: 0, hard: 0, load: 0, zones: { strength: 0, hyper: 0, endur: 0 }, muscles: {}, mvol: {}, mwav: {}, cardioMin: 0, km: 0, runKm: 0, days: 0 }; weeks.set(wk, w); }
-    w.vol += d.vol; w.wav += d.wav; w.sets += d.sets; w.hard += d.hard; w.load += d.load; w.cardioMin += d.cardioMin; w.km += d.km; w.runKm += d.runKm; w.days++;
+    if (!w) { w = { week: wk, vol: 0, wav: 0, sets: 0, hard: 0, str: 0, pow: 0, mstr: {}, load: 0, zones: { strength: 0, hyper: 0, endur: 0 }, muscles: {}, mvol: {}, mwav: {}, cardioMin: 0, km: 0, runKm: 0, days: 0 }; weeks.set(wk, w); }
+    w.vol += d.vol; w.wav += d.wav; w.sets += d.sets; w.hard += d.hard; w.str += d.str; w.pow += d.pow; w.load += d.load; w.cardioMin += d.cardioMin; w.km += d.km; w.runKm += d.runKm; w.days++;
     for (const z in d.zones) w.zones[z] += d.zones[z];
     for (const m in d.muscles) w.muscles[m] = (w.muscles[m] || 0) + d.muscles[m];
+    for (const m in d.mstr) w.mstr[m] = (w.mstr[m] || 0) + d.mstr[m];
     for (const m in d.mvol) { w.mvol[m] = (w.mvol[m] || 0) + d.mvol[m]; w.mwav[m] = (w.mwav[m] || 0) + d.mwav[m]; }
   }
 
@@ -327,25 +361,71 @@ export function currentPain(state, now = Date.now()) {
   return out;
 }
 
-/** What to aim for next time on an exercise: reps first, then load. */
-export function suggest(state, an, exId, beforeDate) {
+/** How the planner's goal changes what a main lift looks like. */
+export const MODES = {
+  strength: { id: 'strength', tag: 'heavy', name: 'Heavy', repLo: 3, repHi: 6, sets: 3, pct: 0.83, rest: 150 },
+  power: { id: 'power', tag: 'fast', name: 'Fast', repLo: 3, repHi: 5, sets: 4, pct: 0.55, rest: 120 },
+};
+
+const plateStep = w => (w >= 20 ? 2.5 : w >= 10 ? 1 : 0.5);
+// dumbbells rarely come in half kilos, so per-hand targets land on whole numbers
+const roundW = (w, perSide) => { const st = perSide && w < 20 ? 1 : plateStep(w); return Math.max(0, Math.round(w / st) * st); };
+
+/**
+ * What to aim for next time on an exercise.
+ * mode: undefined (build muscle: reps first, then load), 'strength' (heavy, 3-6 reps), 'power' (moderate, fast).
+ */
+export function suggest(state, an, exId, beforeDate, mode) {
   const ex = getEx(state, exId);
   let hist = an.exHist.get(exId) || [];
   if (beforeDate) hist = hist.filter(h => h.date < beforeDate);
   if (!hist.length || !ex) return null;
   const last = hist[hist.length - 1];
-  const work = last.sets.filter(s => s.hard >= 0.5);
-  const basis = work.length ? work : last.sets;
+  const refs = hist.filter(h => h.best > 0).slice(-6);
+  const e1 = refs.length ? Math.max(...refs.map(h => h.best)) : 0;
+  const bwLoad = (ex.bw || 0) * bodyweightAt(state, beforeDate || ymd());
+  // a share of your estimated best, turned back into the number you type (per hand, without bodyweight)
+  const fromBest = pct => roundW((pct * e1 - bwLoad) / (ex.perSide ? 2 : 1), ex.perSide);
+  const M = MODES[mode];
+
+  if (mode === 'power') {
+    if (!e1) return { last, target: null, ex, mode };
+    return { last, ex, mode, target: { w: fromBest(M.pct), r: 4, why: `About ${Math.round(M.pct * 100)}% of your estimated best. Move every rep as fast as you can and stop well before it slows down.` } };
+  }
+
+  const counted = last.sets.filter(s => s.f !== 'w' && s.f !== 'p');
+  const work = counted.filter(s => s.hard >= 0.5);
+  const basis = work.length ? work : counted.length ? counted : last.sets;
   const topW = Math.max(...basis.map(s => s.w));
   const atTop = basis.filter(s => s.w === topW);
   const minReps = Math.min(...atTop.map(s => s.r));
+  const maxReps = Math.max(...atTop.map(s => s.r));
+
+  if (mode === 'strength') {
+    const heavyLast = !last.noRef && maxReps <= M.repHi;   // last time's best set was already in heavy territory
+    if (!heavyLast) {
+      if (!e1) return { last, target: null, ex, mode };
+      return { last, ex, mode, target: { w: fromBest(M.pct), r: 4, why: `About ${Math.round(M.pct * 100)}% of your estimated best. Stop with about 2 reps left.` } };
+    }
+    if (minReps >= M.repHi) {
+      const step = topW > 0 ? plateStep(topW) : 0;
+      return { last, ex, mode, target: step ? { w: topW + step, r: M.repLo + 1, why: `All sets reached ${M.repHi} reps. Add weight.` } : { w: topW, r: minReps + 1, why: 'Add a rep, or add weight if you can.' } };
+    }
+    return { last, ex, mode, target: { w: topW, r: Math.min(M.repHi, maxReps + 1), why: `Same weight, one more rep (up to ${M.repHi}). Leave about 2 in reserve.` } };
+  }
+
   const lo = ex.repLo || 8, hi = ex.repHi || 12;
+  // coming back from heavy or fast work: start the usual rep range from your estimated best
+  if ((last.noRef || last.mode === 'strength' || last.mode === 'power') && e1 && (last.noRef || minReps < lo)) {
+    const pct = 1 / (1 + (lo + 2) / 30);
+    return { last, ex, target: { w: fromBest(pct), r: lo, why: `Back to ${lo}–${hi} reps: about ${Math.round(pct * 100)}% of your estimated best.` } };
+  }
   let target;
   if (minReps >= hi) {
     const step = topW >= 40 ? 5 : topW >= 20 ? 2.5 : topW >= 10 ? 1 : topW > 0 ? 0.5 : 0;
     target = step ? { w: topW + step, r: lo, why: `All sets reached ${hi} reps. Add weight.` } : { w: topW, r: minReps + 1, why: 'Add a rep.' };
   } else {
-    target = { w: topW, r: Math.min(hi, Math.max(...atTop.map(s => s.r)) + 1), why: `Same weight, one more rep (up to ${hi}).` };
+    target = { w: topW, r: Math.min(hi, maxReps + 1), why: `Same weight, one more rep (up to ${hi}).` };
   }
   return { last, target, ex };
 }

@@ -26,7 +26,7 @@ jobs:
       - run: npm test
       - run: npm run build
         env:
-          STYRKE_VERSION: 1.1.${{ github.run_number }}
+          STYRKE_VERSION: 1.2.${{ github.run_number }}
       - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v6
@@ -44,8 +44,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v1.1.${{ github.run_number }}" Styrke.apk \
-            --title "Styrke 1.1.${{ github.run_number }}" \
+          gh release create "v1.2.${{ github.run_number }}" Styrke.apk \
+            --title "Styrke 1.2.${{ github.run_number }}" \
             --notes "Install by opening Styrke.apk on your phone. It updates the installed app in place; your data stays." \
             --latest
 

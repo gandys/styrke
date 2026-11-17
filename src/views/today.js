@@ -2,7 +2,7 @@
 
 import { h, icon, iconBtn, sheet, toast, confirmSheet, numInput, field, closeAllSheets } from '../ui.js';
 import { state, commit, touch, put, del, sessionsOn, newSession, flush } from '../store.js';
-import { analyze, getEx, suggest, loadAt, currentPain, statusOf, sessionSummary, getSettings } from '../model.js';
+import { analyze, getEx, suggest, loadAt, currentPain, statusOf, sessionSummary, getSettings, MODES } from '../model.js';
 import { planMinutes, painCheck, presetItems } from '../planner.js';
 import { MUSCLE, JOINT, TYPE } from '../library.js';
 import { ymd, addDays, relDay, fmtDate, fmtW, fmtNum, fmtDur, uid, diffDays, fmtMin } from '../util.js';
@@ -61,7 +61,17 @@ function templateSets(an, exId, n, date) {
   }
   return Array.from({ length: n || 3 }, () => ({ w: null, r: null, d: false }));
 }
-function makeExItem(an, exId, sets, date) { return { id: uid('i'), k: 'ex', ex: exId, sets: templateSets(an, exId, sets, date) }; }
+/** Rows for a heavy or fast lift: the target weight is filled in, the target reps are the placeholder. */
+function modeSets(an, exId, n, date, mode) {
+  const M = MODES[mode];
+  const sg = suggest(state, an, exId, date, mode);
+  const t = sg?.target;
+  return Array.from({ length: n || M.sets }, () => ({ w: t ? t.w : null, r: null, ph: t ? t.r : M.repHi - 1, d: false, ...(mode === 'power' ? { f: 'p' } : {}) }));
+}
+function makeExItem(an, exId, sets, date, mode) {
+  if (MODES[mode]) return { id: uid('i'), k: 'ex', ex: exId, mode, sets: modeSets(an, exId, sets, date, mode) };
+  return { id: uid('i'), k: 'ex', ex: exId, sets: templateSets(an, exId, sets, date) };
+}
 function makeBlockItem(an, b, rounds, date) {
   const n = rounds || b.rounds || 3;
   const lastW = id => { const hs = an.exHist.get(id); const l = hs?.[hs.length - 1]; return l ? { w: l.sets[l.sets.length - 1].w, ph: l.sets[l.sets.length - 1].r } : { w: null }; };
@@ -83,7 +93,7 @@ function save(s, reason = 'log') {
 /** Turn planned items (from a planned day or a preset) into loggable rows in a session. */
 function addPlanned(s, items, an, date) {
   for (const it of items || []) {
-    if (it.k === 'ex') { const item = makeExItem(an, it.ex, it.sets, date); if (it.note) item.note = it.note; if (it.easy) item.easy = true; s.items.push(item); }
+    if (it.k === 'ex') { const item = makeExItem(an, it.ex, it.sets, date, it.mode); if (it.rest) item.rest = it.rest; if (it.note) item.note = it.note; if (it.easy) item.easy = true; s.items.push(item); }
     else if (it.k === 'block') { const b = state.blocks[it.block]; if (b && !b.deleted) s.items.push(makeBlockItem(an, b, it.rounds, date)); }
     else if (it.k === 'cardio') s.items.push({ id: uid('i'), k: 'cardio', ex: it.ex, name: it.name, min: it.min ?? null, km: it.km ?? null, rpe: it.rpe || 4, note: it.note || '', d: false, planned: true });
   }
@@ -146,7 +156,7 @@ export function renderToday(root, ctx) {
       warns.length ? h('div', { class: 'banner pain', style: { margin: '0 0 8px' } }, icon('warn'), h('div', null, [...new Set(warns)].map(w => h('div', null, w)))) : null,
       pd.note ? h('p', { class: 'note', style: { marginBottom: '6px' } }, pd.note) : null,
       !warns.length && pd.notes?.length ? h('div', { class: 'banner', style: { margin: '0 0 8px', fontSize: '13.5px' } }, icon('info'), h('div', null, pd.notes.map(n => h('div', null, n)))) : null,
-      items.length ? h('div', null, items.map(it => { const l = itemLabel(it); return h('div', { class: 'plan-item' }, h('div', { class: 'grow' }, h('div', { style: { fontWeight: 500 } }, l.name, it.easy ? h('span', { class: 'tag pain', style: { marginLeft: '8px' } }, 'easy') : null), l.sub ? h('div', { class: 'note tiny ell' }, l.sub) : null), h('span', { class: 'q' }, l.q)); }))
+      items.length ? h('div', null, items.map(it => { const l = itemLabel(it); return h('div', { class: 'plan-item' }, h('div', { class: 'grow' }, h('div', { style: { fontWeight: 500 } }, l.name, MODES[it.mode] ? h('span', { class: 'tag ' + MODES[it.mode].tag, style: { marginLeft: '8px' } }, MODES[it.mode].tag) : null, it.easy ? h('span', { class: 'tag pain', style: { marginLeft: '8px' } }, 'easy') : null), l.sub ? h('div', { class: 'note tiny ell' }, l.sub) : null), h('span', { class: 'q' }, l.q)); }))
         : h('p', { class: 'note' }, 'You committed to training this day. Nothing is filled in yet.'),
       future ? null : h('div', { class: 'row', style: { marginTop: '12px' } },
         items.length ? h('button', { class: 'btn primary grow', onClick: () => { startFromPlan(pd, an); ctx.refresh(); } }, icon('play'), hasItems ? 'Add planned workout' : 'Start this workout') : null,
@@ -214,8 +224,8 @@ function setRow(s, set, i, opts) {
     } else { set.d = false; save(s); onDone(false); }
   } }, tick());
   const applyType = f => { if (f) set.f = f; else delete set.f; save(s); opts.rerender(); };
-  const pickType = () => getSettings(state).setTap === 'cycle' ? applyType({ '': 'w', w: 'h', h: 'd', d: '' }[set.f || '']) : setTypeSheet(set, applyType);
-  const typeWord = set.f === 'w' ? ', warm-up' : set.f === 'h' ? ', counted as a hard set' : set.f === 'd' ? ', drop set' : '';
+  const pickType = () => getSettings(state).setTap === 'cycle' ? applyType({ '': 'w', w: 'h', h: 'd', d: 'p', p: '' }[set.f || '']) : setTypeSheet(set, applyType);
+  const typeWord = set.f === 'w' ? ', warm-up' : set.f === 'h' ? ', counted as a hard set' : set.f === 'd' ? ', drop set' : set.f === 'p' ? ', fast set' : '';
   if (block) row.appendChild(h('button', { class: 'bn', 'aria-label': `${label}${typeWord}. Change set type`, onClick: pickType }, set.f ? h('em', { class: set.f }, set.f.toUpperCase()) : null, label));
   else row.appendChild(h('button', { class: 'n' + (set.f ? ' ' + set.f : ''), 'aria-label': `Set ${i + 1}${typeWord}. Change set type`, onClick: pickType }, set.f ? set.f.toUpperCase() : String(opts.num ?? i + 1)));
   row.append(wEl, h('span', { class: 'x' }, '×'), repsEl, okBtn);
@@ -227,14 +237,16 @@ function renderItem(s, it, idx, an, ctx) {
   const menu = () => itemMenu(s, it, idx, ctx);
   if (it.k === 'ex') {
     const ex = getEx(state, it.ex);
-    const sg = suggest(state, an, it.ex, s.date);
+    const M = MODES[it.mode];
+    const sg = suggest(state, an, it.ex, s.date, it.mode);
     const wl = w => (ex?.bw && !w ? 'BW' : fmtW(w));
     const last = sg?.last;
     card.appendChild(h('div', { class: 'xhead' },
       h('button', { class: 'grow', style: { textAlign: 'left' }, onClick: () => showExerciseHistory(it.ex) },
-        h('div', { class: 'name' }, ex?.name || 'Unknown exercise', it.easy ? h('span', { class: 'tag pain', style: { marginLeft: '8px' } }, 'go easy') : null, ex?.needsSetup ? h('span', { class: 'tag warn', style: { marginLeft: '8px' } }, 'set muscles') : null),
+        h('div', { class: 'name' }, ex?.name || 'Unknown exercise', M ? h('span', { class: 'tag ' + M.tag, style: { marginLeft: '8px' } }, M.tag) : null, it.easy ? h('span', { class: 'tag pain', style: { marginLeft: '8px' } }, 'go easy') : null, ex?.needsSetup ? h('span', { class: 'tag warn', style: { marginLeft: '8px' } }, 'set muscles') : null),
         last ? h('div', { class: 'meta' }, 'Last ', h('b', null, last.sets.filter(x => x.f !== 'w').slice(0, 5).map(x => `${wl(x.w)}×${x.r}`).join('  ')), sg.target ? [h('span', null, '   Aim '), h('b', { style: { color: 'var(--accent)' } }, `${wl(sg.target.w)}×${sg.target.r}`)] : null)
-          : h('div', { class: 'meta' }, 'First time. ', ex ? `Aim for ${ex.repLo}–${ex.repHi} reps.` : '')),
+          : h('div', { class: 'meta' }, 'First time. ', M ? (it.mode === 'power' ? 'Pick a weight that feels like half effort and move it fast.' : `Aim for ${M.repLo}–${M.repHi} reps with about 2 left.`) : ex ? `Aim for ${ex.repLo}–${ex.repHi} reps.` : ''),
+        M && last ? h('div', { class: 'meta' }, it.mode === 'power' ? 'Fast: every rep as quick as you can, stop well before it slows.' : `Heavy: ${M.repLo}–${M.repHi} reps, stop with about 2 left.`) : null),
       iconBtn('dots', 'More options', menu)));
     const sets = h('div', { class: 'sets' });
     if (idx === s.items.findIndex(x => x.k === 'ex') && it.sets.length) card.appendChild(h('div', { class: 'sethead' }, h('span'), h('span', null, ex?.bw ? 'added kg' : ex?.perSide ? 'kg per hand' : 'kg'), h('span'), h('span', null, 'reps'), h('span', null, 'done')));
@@ -242,11 +254,11 @@ function renderItem(s, it, idx, an, ctx) {
     it.sets.forEach((set, i) => {
       const num = set.f === 'w' ? null : ++n;
       sets.appendChild(setRow(s, set, i, { num, prev: it.sets[i - 1], rerender: () => ctx.refresh(), wph: ex?.bw ? '+ kg' : 'kg',
-        onDone: on => { if (on) startTimer(ex?.rest || 90, i < it.sets.length - 1 ? 'set ' + (i + 2) : ''); ctx.refresh(); } }));
+        onDone: on => { if (on) startTimer(it.rest || ex?.rest || 90, i < it.sets.length - 1 ? 'set ' + (i + 2) : ''); ctx.refresh(); } }));
     });
     card.appendChild(sets);
     card.appendChild(h('div', { class: 'xfoot' },
-      h('button', { class: 'btn ghost small', onClick: () => { const p = it.sets[it.sets.length - 1]; it.sets.push({ w: p?.w ?? null, r: null, ph: p?.r ?? p?.ph, d: false }); save(s); ctx.refresh(); } }, icon('plus'), 'Set'),
+      h('button', { class: 'btn ghost small', onClick: () => { const p = it.sets[it.sets.length - 1]; it.sets.push({ w: p?.w ?? null, r: null, ph: p?.r ?? p?.ph, d: false, ...(p?.f === 'p' ? { f: 'p' } : {}) }); save(s); ctx.refresh(); } }, icon('plus'), 'Set'),
       it.sets.length ? h('button', { class: 'btn ghost small', style: { color: 'var(--dim)' }, onClick: async () => { const p = it.sets[it.sets.length - 1]; if (p.d && !(await confirmSheet('Remove this set?', `${fmtW(p.w)} kg × ${p.r} is already ticked off.`, 'Remove', true))) return; it.sets.pop(); save(s); ctx.refresh(); } }, 'Remove last') : null,
       it.note ? h('span', { class: 'note tiny ell grow', style: { textAlign: 'right' } }, it.note) : null));
   } else if (it.k === 'block') {
@@ -298,6 +310,7 @@ function itemMenu(s, it, idx, ctx) {
       it.k === 'ex' ? act('History and progress', 'chart', () => showExerciseHistory(it.ex)) : null,
       it.k === 'ex' ? act('Swap for another exercise', 'swap', () => pickExercise({ kind: 'strength', title: 'Swap exercise', onPick: ex => { it.ex = ex.id; save(s); ctx.refresh(); } })) : null,
       it.k !== 'block' ? act('Edit exercise details', 'edit', () => editExercise(it.ex, {}, () => ctx.refresh())) : null,
+      it.k === 'ex' ? act('Change the aim: muscle, heavy or fast', 'bolt', () => aimSheet(s, it, ctx)) : null,
       it.k === 'ex' ? act(it.note ? 'Edit note' : 'Add a note', 'list', () => noteSheet(it.note, v => { it.note = v; save(s); ctx.refresh(); })) : null,
       idx > 0 ? act('Move up', 'up', () => { s.items.splice(idx - 1, 0, s.items.splice(idx, 1)[0]); save(s); ctx.refresh(); }) : null,
       idx < s.items.length - 1 ? act('Move down', 'down', () => { s.items.splice(idx + 1, 0, s.items.splice(idx, 1)[0]); save(s); ctx.refresh(); }) : null,
@@ -306,6 +319,29 @@ function itemMenu(s, it, idx, ctx) {
         toast('Removed', { label: 'Undo', fn: () => { s.items.splice(idx, 0, removed); save(s); ctx.refresh(); } });
       }, 'danger')),
   });
+}
+
+/** Switch one exercise between building muscle, heavy strength work and fast power work. */
+function aimSheet(s, it, ctx) {
+  const an = analyze(state);
+  const pick = mode => {
+    sh.close();
+    if ((it.mode || '') === mode) return;
+    if (mode) it.mode = mode; else delete it.mode;
+    delete it.rest;
+    if (MODES[mode]) it.rest = Math.max(getEx(state, it.ex)?.rest || 0, MODES[mode].rest);
+    if (!it.sets.some(x => x.d)) {
+      // nothing ticked off yet: lay the sets out afresh for the new aim
+      it.sets = MODES[mode] ? modeSets(an, it.ex, 0, s.date, mode) : templateSets(an, it.ex, getSettings(state).setsPerExercise, s.date);
+    } else for (const x of it.sets) if (!x.d) { if (mode === 'power') x.f = 'p'; else if (x.f === 'p') delete x.f; }
+    save(s); ctx.refresh();
+  };
+  const opt = (mode, title, text) => h('button', { 'aria-pressed': String((it.mode || '') === mode), onClick: () => pick(mode) },
+    h('span', { class: 'grow' }, h('div', { class: 't' }, title), h('div', { class: 's' }, text)), (it.mode || '') === mode ? icon('check') : null);
+  const sh = sheet({ title: 'What is this exercise for today?', body: h('div', { class: 'list' },
+    opt('', 'Build muscle', 'Your usual rep range, each set ending close to your limit.'),
+    opt('strength', 'Heavy, for strength', '3 sets of 3–6 reps at about 80–85% of your best, about 2 reps left, longer rests.'),
+    opt('power', 'Fast, for power', '4 sets of 3–5 quick reps at about 55% of your best. Stop well before you tire.')) });
 }
 
 function noteSheet(value, onSave) {
@@ -375,5 +411,6 @@ function setTypeSheet(set, onPick) {
     opt('', '1', '', 'Normal', 'The app estimates how hard it was from your recent best.'),
     opt('w', 'W', 'w', 'Warm-up', 'Logged, but does not count toward hard sets or muscle load.'),
     opt('h', 'H', 'h', 'Hard', 'Always counts as one full hard set, whatever the estimate says.'),
-    opt('d', 'D', 'd', 'Drop set', 'Counts as at least half a hard set.')) });
+    opt('d', 'D', 'd', 'Drop set', 'Counts as at least half a hard set.'),
+    opt('p', 'P', 'p', 'Fast (power)', 'A moderate weight moved as fast as you can, stopped well before you tire. Counts toward power, and only a little toward hard sets.')) });
 }

@@ -22,7 +22,7 @@ function weekList(an, n) {
   let first = addDays(cur, -(n - 1) * 7);
   if (n >= 999) first = an.sessions.length ? weekStart(an.sessions[0].date) : cur;
   const out = [];
-  for (let w = first; w <= cur; w = addDays(w, 7)) out.push(an.weeks.get(w) || { week: w, vol: 0, wav: 0, sets: 0, hard: 0, load: 0, zones: { strength: 0, hyper: 0, endur: 0 }, muscles: {}, mvol: {}, mwav: {}, cardioMin: 0, km: 0, runKm: 0, days: 0 });
+  for (let w = first; w <= cur; w = addDays(w, 7)) out.push(an.weeks.get(w) || { week: w, vol: 0, wav: 0, sets: 0, hard: 0, str: 0, pow: 0, mstr: {}, load: 0, zones: { strength: 0, hyper: 0, endur: 0 }, muscles: {}, mvol: {}, mwav: {}, cardioMin: 0, km: 0, runKm: 0, days: 0 });
   return out;
 }
 
@@ -45,9 +45,25 @@ export function renderInsights(root, ctx) {
 
   const tiles = h('div', { class: 'tiles four' },
     h('div', { class: 'tile' }, h('div', { class: 'v' }, cur.days), h('div', { class: 'k' }, 'Training days this week'), h('div', { class: 'delta' }, prev ? `${prev.days} last week` : '')),
-    h('div', { class: 'tile' }, h('div', { class: 'v' }, fmtNum(cur.hard, 1)), h('div', { class: 'k' }, 'Hard sets'), h('div', { class: 'delta' }, prev?.hard ? delta(cur.hard, prev.hard) : '')),
-    h('div', { class: 'tile' }, h('div', { class: 'v' }, fmtNum(cur.vol), h('small', null, 'kg')), h('div', { class: 'k' }, 'Volume'), h('div', { class: 'delta' }, prev?.vol ? delta(cur.vol, prev.vol) : '')),
+    h('div', { class: 'tile' }, h('div', { class: 'v' }, fmtNum(cur.hard, 1)), h('div', { class: 'k' }, 'Size stimulus: hard sets'), h('div', { class: 'delta' }, prev?.hard ? delta(cur.hard, prev.hard) : '')),
+    h('div', { class: 'tile' }, h('div', { class: 'v' }, fmtNum(cur.str, 1)), h('div', { class: 'k' }, 'Strength stimulus: heavy sets'), h('div', { class: 'delta' }, prev?.str ? delta(cur.str, prev.str) : '')),
     h('div', { class: 'tile' }, h('div', { class: 'v' }, fmtNum(cur.wav), h('small', null, 'kg')), h('div', { class: 'k' }, 'Weight-adjusted volume'), h('div', { class: 'delta' }, prev?.wav ? delta(cur.wav, prev.wav) : '')));
+
+  // ---- the three kinds of stimulus, week by week
+  const anyPow = weeks.some(w => w.pow > 0);
+  const goalName = { size: 'muscle size', strength: 'strength', power: 'power' }[an.settings.planGoal] || 'muscle size';
+  const fullW = weeks.slice(0, -1);   // the current week is still filling up
+  const mean = (arr, k) => arr.reduce((a, w) => a + w[k], 0) / Math.max(1, arr.length);
+  const trend = k => { if (fullW.length < 8) return null; const a = mean(fullW.slice(-8, -4), k), b = mean(fullW.slice(-4), k); return a > 0.5 ? (b - a) / a * 100 : null; };
+  const word = p => p == null ? null : Math.abs(p) < 8 ? 'steady' : `${p > 0 ? 'up' : 'down'} ${Math.round(Math.abs(p))}%`;
+  const tS = word(trend('hard')), tH = word(trend('str'));
+  const stimPanel = h('div', { class: 'panel' },
+    h('h2', null, 'Training stimulus', h('span', { class: 'note', style: { fontWeight: 400 } }, 'sets per week')),
+    legend([{ name: 'Size: hard sets', color: c1 }, { name: 'Strength: heavy sets', color: c3 }, ...(anyPow ? [{ name: 'Power: fast sets', color: c2 }] : [])]),
+    lineChart({ labels, unit: 'sets', fmt: v => fmtNum(v, 1), series: [{ name: 'Size', color: c1, values: weeks.map(w => w.hard) }, { name: 'Strength', color: c3, values: weeks.map(w => w.str) }, ...(anyPow ? [{ name: 'Power', color: c2, values: weeks.map(w => w.pow) }] : [])] }),
+    tS || tH ? h('div', { class: 'banner info', style: { marginTop: '10px', marginBottom: 0 } }, icon('info'),
+      h('div', null, h('b', null, 'Last 4 full weeks against the 4 before: '), [tS ? `size stimulus ${tS}` : null, tH ? `strength stimulus ${tH}` : null].filter(Boolean).join(', '), `. Your planner goal is ${goalName}.`)) : null,
+    h('p', { class: 'note tiny', style: { marginTop: '8px' } }, 'A hard set ends close to your limit: that is what grows muscle, at almost any weight. A heavy set uses 80% or more of your estimated best (sets from 75% count in part): that is what builds maximal strength. The same set can be both.'));
 
   const volPanel = h('div', { class: 'panel' },
     h('h2', null, 'Volume and weight-adjusted volume'),
@@ -57,7 +73,7 @@ export function renderInsights(root, ctx) {
 
   const zonePanel = h('div', { class: 'panel' },
     h('h2', null, 'What kind of work'),
-    legend([{ name: 'Heavy (85%+ of best)', color: c3 }, { name: 'Moderate (60–85%)', color: c1 }, { name: 'Light (under 60%)', color: c2 }]),
+    legend([{ name: 'Heavy (80%+ of best)', color: c3 }, { name: 'Moderate (60–80%)', color: c1 }, { name: 'Light (under 60%)', color: c2 }]),
     barChart({ unit: 'kg', bars: weeks.map((w, i) => ({ label: labels[i], tip: 'Week of ' + labels[i], segs: [{ name: 'Light', color: c2, v: w.zones.endur }, { name: 'Moderate', color: c1, v: w.zones.hyper }, { name: 'Heavy', color: c3, v: w.zones.strength }] })) }),
     h('p', { class: 'note tiny', style: { marginTop: '8px' } }, 'Volume split by how heavy each set was against your estimated best for that exercise. Heavy builds maximal strength, moderate is the main muscle-building zone, light is endurance and warm-up.'));
 
@@ -133,7 +149,7 @@ export function renderInsights(root, ctx) {
       lineChart({ labels: runs.map(r => wkLabel(r.date)), min0: false, height: 150, unit: 'min/km', fmt: paceFmt, series: [{ name: 'Pace', color: c2, values: runs.map(r => r.pace) }] })) : null;
     root.appendChild(tiles);
     root.appendChild(h('div', { style: { height: '12px' } }));
-    root.appendChild(h('div', { class: 'cols' }, h('div', null, volPanel, zonePanel, cardioPanel, pacePanel), h('div', null, loadPanel, heatPanel, h('div', { class: 'sec', style: { marginTop: 0 } }, 'Recent sessions'), histPanel)));
+    root.appendChild(h('div', { class: 'cols' }, h('div', null, stimPanel, volPanel, zonePanel, cardioPanel, pacePanel), h('div', null, loadPanel, heatPanel, h('div', { class: 'sec', style: { marginTop: 0 } }, 'Recent sessions'), histPanel)));
     return;
   }
 
@@ -207,10 +223,14 @@ export function renderInsights(root, ctx) {
     // ---- volume and weight-adjusted volume per muscle
     const withVol = MUSCLES.filter(m => weeks.some(w => (w.mvol[m.id] || 0) > 0));
     if (!selMuscle || !withVol.some(m => m.id === selMuscle)) selMuscle = withVol.slice().sort((a, b) => weeks.reduce((t, w) => t + (w.mvol[b.id] || 0), 0) - weeks.reduce((t, w) => t + (w.mvol[a.id] || 0), 0))[0]?.id || null;
+    const mt = selMuscle ? muscleTarget(an.settings, selMuscle) : null;
     const mvPanel = selMuscle ? h('div', { class: 'panel' },
-      h('h2', null, 'Volume per muscle'),
+      h('h2', null, 'One muscle, week by week'),
       h('select', { 'aria-label': 'Muscle', onChange: e => { selMuscle = e.target.value; ctx.refresh(); } }, withVol.map(m => h('option', { value: m.id, selected: m.id === selMuscle }, m.name))),
-      h('div', { style: { height: '10px' } }),
+      h('div', { style: { margin: '12px 0 6px', fontWeight: 600, fontSize: '13.5px' } }, 'Stimulus', h('span', { class: 'note', style: { fontWeight: 400, marginLeft: '8px' } }, `target ${mt.lo}–${mt.hi} hard sets a week`)),
+      legend([{ name: 'Size: hard sets', color: c1 }, { name: 'Strength: heavy sets', color: c3 }, { name: 'Bottom of target', color: cssVar('--faint'), dash: true }]),
+      lineChart({ labels, unit: 'sets', height: 160, fmt: v => fmtNum(v, 1), series: [{ name: 'Size', color: c1, values: weeks.map(w => w.muscles[selMuscle] || 0) }, { name: 'Strength', color: c3, values: weeks.map(w => w.mstr[selMuscle] || 0) }, { name: 'Bottom of target', color: cssVar('--faint'), dash: true, dots: false, values: weeks.map(() => mt.lo) }] }),
+      h('div', { style: { margin: '14px 0 6px', fontWeight: 600, fontSize: '13.5px' } }, 'Volume'),
       legend([{ name: 'Volume (kg × reps)', color: c1 }, { name: 'Weight-adjusted', color: c2 }]),
       lineChart({ labels, unit: 'kg', series: [{ name: 'Volume', color: c1, values: weeks.map(w => w.mvol[selMuscle] || 0) }, { name: 'Weight-adjusted', color: c2, values: weeks.map(w => w.mwav[selMuscle] || 0) }] }),
       h('p', { class: 'note tiny', style: { marginTop: '8px' } }, 'Each set\'s volume is shared out by how much the exercise works the muscle: in full for the main muscle, about half for helpers. Amber above blue means that muscle worked heavier than its recent usual.')) : null;
@@ -240,6 +260,24 @@ export function renderInsights(root, ctx) {
         h('td', { class: 'n' }, fmtNum(shownLoad(b.ex, b.now), 1)), h('td', { class: 'n' }, (b.change >= 0 ? '▲ ' : '▼ ') + fmtNum(Math.abs(b.change), 1) + '%'))))),
     h('p', { class: 'note tiny', style: { marginTop: '8px' } }, 'Average of the first two sessions in the period against the last two, so one odd day does not swing it. Tap a row for the full history. An exercise that has gone many sessions without a best may need a change: more rest, a different rep range, or a swap.')) : null;
 
+  // strength work per lift over the last 4 full weeks: how many heavy sets, how often
+  const cw = weekStart(today), from4 = addDays(cw, -28);
+  const lifts = new Map();
+  for (const st of an.allSets) {
+    if (st.date < from4 || st.date >= cw || !(st.str > 0)) continue;
+    let l = lifts.get(st.ex); if (!l) { l = { sets: 0, days: {} }; lifts.set(st.ex, l); }
+    l.sets += st.str; l.days[st.date] = (l.days[st.date] || 0) + st.str;
+  }
+  // a day counts once the lift got at least one full heavy set on it
+  const liftRows = [...lifts.entries()].map(([id, l]) => ({ id, sets: l.sets / 4, freq: Object.values(l.days).filter(v => v >= 1).length / 4 })).filter(r => r.freq > 0).sort((a, b) => b.sets - a.sets).slice(0, 10);
+  const liftPanel = h('div', { class: 'panel' },
+    h('h2', null, 'Strength work per lift', h('span', { class: 'note', style: { fontWeight: 400 } }, 'last 4 full weeks')),
+    liftRows.length ? h('table', { class: 't' }, h('thead', null, h('tr', null, h('th', null, 'Exercise'), h('th', { class: 'n' }, 'Heavy sets / wk'), h('th', { class: 'n' }, 'Times / wk'))),
+      h('tbody', null, liftRows.map(r => h('tr', { style: { cursor: 'pointer' }, onClick: () => showExerciseHistory(r.id) }, h('td', null, exName(r.id), r.freq >= 2 && r.sets >= 4 ? h('span', { class: 'tag good', style: { marginLeft: '8px' } }, 'well covered') : null),
+        h('td', { class: 'n' }, fmtNum(r.sets, 1)), h('td', { class: 'n' }, fmtNum(r.freq, 1))))))
+      : h('p', { class: 'note' }, 'No heavy sets in the last four full weeks. Heavy means 80% or more of your estimated best, roughly a weight you can lift 7 times or fewer.'),
+    h('p', { class: 'note tiny', style: { marginTop: '8px' } }, 'For maximal strength the research favours heavy sets, 2 to 3 per session, with each lift trained at least twice a week and placed early in the session. Set the planner goal to Strength to have that arranged for you.'));
+
   // rep ranges
   const buckets = [['1–5', 1, 5], ['6–8', 6, 8], ['9–12', 9, 12], ['13–15', 13, 15], ['16–20', 16, 20], ['21+', 21, 999]];
   const sets = an.allSets.filter(inRange);
@@ -256,7 +294,7 @@ export function renderInsights(root, ctx) {
     lineChart({ labels, unit: '%', height: 150, fmt: v => fmtNum(v), series: [{ name: 'Sets that count as hard', color: c1, values: weeks.map(w => w.sets ? w.hard / w.sets * 100 : null) }] }),
     h('p', { class: 'note tiny', style: { marginTop: '8px' } }, 'Share of logged sets that end close enough to your limit to count. Warm-ups pull it down, which is fine. A falling line with the same routine can mean you are coasting.'));
 
-  root.appendChild(h('div', { class: 'cols' }, h('div', null, exPanel, boardPanel), h('div', null, repPanel, qualPanel, prPanel)));
+  root.appendChild(h('div', { class: 'cols' }, h('div', null, exPanel, liftPanel, boardPanel), h('div', null, repPanel, qualPanel, prPanel)));
 }
 
 export function showExerciseHistory(exId) {
@@ -270,7 +308,7 @@ export function showExerciseHistory(exId) {
     title: ex?.name || 'Exercise', wide: true,
     body: !hs.length ? h('div', { class: 'empty' }, h('b', null, 'No history yet'), 'Log this exercise once and its progress shows up here.') : [
       h('div', { class: 'tiles' },
-        h('div', { class: 'tile', style: { background: 'var(--raised)' } }, h('div', { class: 'v' }, fmtNum(shownLoad(ex, hs[hs.length - 1].best), 1), h('small', null, 'kg')), h('div', { class: 'k' }, 'Estimated one-rep best' + (ex?.perSide && !ex.bw ? ', per hand' : ex?.bw ? ', with bodyweight' : ''))),
+        h('div', { class: 'tile', style: { background: 'var(--raised)' } }, h('div', { class: 'v' }, fmtNum(shownLoad(ex, (hs.filter(x => x.best > 0).pop() || hs[hs.length - 1]).best), 1), h('small', null, 'kg')), h('div', { class: 'k' }, 'Estimated one-rep best' + (ex?.perSide && !ex.bw ? ', per hand' : ex?.bw ? ', with bodyweight' : ''))),
         h('div', { class: 'tile', style: { background: 'var(--raised)' } }, h('div', { class: 'v' }, `${fmtW(best.top.w)}×${best.top.r}`), h('div', { class: 'k' }, 'Best set, ' + fmtDate(best.date))),
         h('div', { class: 'tile', style: { background: 'var(--raised)' } }, h('div', { class: 'v' }, hs.length), h('div', { class: 'k' }, 'Sessions logged'))),
       sg ? h('div', { class: 'banner info', style: { marginTop: '12px' } }, icon('bolt'), h('div', null, h('b', null, `Next time: ${fmtW(sg.target.w)} kg × ${sg.target.r}. `), sg.target.why)) : null,

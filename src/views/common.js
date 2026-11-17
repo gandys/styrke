@@ -22,7 +22,8 @@ export function itemLabel(it) {
   if (it.k === 'block') { const b = state.blocks[it.block]; return { name: it.name || b?.name || 'Block', q: `${it.rounds || b?.rounds || 3} rounds`, sub: (it.exIds || b?.exIds || []).map(exName).join(', ') }; }
   if (it.k === 'cardio') return { name: it.name || exName(it.ex), q: it.min ? `${it.min} min` : it.km ? `${it.km} km` : '', sub: [it.name ? exName(it.ex) : '', it.km && it.min ? `${it.km} km` : '', it.note].filter(Boolean).join(', ') };
   const ex = getEx(state, it.ex);
-  return { name: ex?.name || 'Unknown', q: `${it.sets || 3} × ${it.repLo && it.repHi ? (it.repLo === it.repHi ? it.repLo : it.repLo + '–' + it.repHi) : (ex ? ex.repLo + '–' + ex.repHi : '')}`, sub: muscleSummary(ex) };
+  const reps = it.repLo && it.repHi ? (it.repLo === it.repHi ? String(it.repLo) : it.repLo + '–' + it.repHi) : (ex ? ex.repLo + '–' + ex.repHi : '');
+  return { name: ex?.name || 'Unknown', q: `${it.sets || 3} × ${reps}`, sub: it.mode ? `${reps} ${it.mode === 'power' ? 'fast reps' : 'reps'}, ${muscleSummary(ex)}` : muscleSummary(ex) };
 }
 
 // ---------- exercise picker

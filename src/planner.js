@@ -2,10 +2,12 @@
 // muscle gets its weekly dose, is trained when it has recovered, and the session fits the clock.
 
 import { MUSCLES, MUSCLE, JOINT, TYPE, fitsType, primaryMuscle } from './library.js';
-import { getEx, getSettings, muscleTarget, loadAt, currentPain, cardioUnits, isDeloadWeek, myExercises } from './model.js';
+import { getEx, getSettings, muscleTarget, loadAt, currentPain, cardioUnits, isDeloadWeek, myExercises, MODES } from './model.js';
 import { addDays, weekStart, parseYmd, ymd, uid, diffDays } from './util.js';
 
 const WORK_SEC = 40;      // time under the bar per set
+const FAST_SEC = 20;      // a fast (power) set is short
+const FAST_CREDIT = 0.35; // a fast set stops far from your limit: it counts this much toward hard sets and load
 const SETUP_SEC = 75;     // walk over, adjust, warm-up feel set
 const WARMUP_MIN = 5;
 
@@ -21,7 +23,7 @@ export function itemMinutes(state, it) {
   }
   const ex = getEx(state, it.ex);
   const sets = it.sets || 3;
-  return (sets * (WORK_SEC + (ex?.rest || 90)) + SETUP_SEC) / 60;
+  return (sets * ((it.mode === 'power' ? FAST_SEC : WORK_SEC) + (it.rest || ex?.rest || 90)) + SETUP_SEC) / 60;
 }
 
 export function planMinutes(state, items) {
@@ -40,7 +42,7 @@ export function itemEvent(state, it, t) {
     for (const [m, c] of Object.entries(ex.muscles || {})) { ev.muscles[m] = (ev.muscles[m] || 0) + sets * c * (ex.cost || 1); ev.sets[m] = (ev.sets[m] || 0) + sets * c; }
     for (const [j, c] of Object.entries(ex.joints || {})) ev.joints[j] = (ev.joints[j] || 0) + sets * c * 1.25;
   };
-  if (it.k === 'ex') addEx(it.ex, it.sets || 3);
+  if (it.k === 'ex') addEx(it.ex, (it.sets || 3) * (it.mode === 'power' ? FAST_CREDIT : 1));
   else if (it.k === 'block') {
     const b = it.block && state.blocks?.[it.block];
     for (const id of (it.exIds || b?.exIds || [])) addEx(id, it.rounds || b?.rounds || 3);
@@ -149,6 +151,16 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
   const presets = Object.values(state.presets || {}).filter(p => !p.deleted);
   const usePresets = settings.planMode === 'presets' && presets.some(p => p.plan !== false);
   const result = { days: {}, notes: [] };
+  // priorities
+  const goal = MODES[settings.planGoal] ? settings.planGoal : 'size';
+  const knob = k => Math.max(-2, Math.min(2, Number(settings[k]) || 0));
+  const fBody = knob('focusBody'), fMix = knob('focusMix'), fBlocks = knob('focusBlocks'), fRec = knob('focusRecovery');
+  const mixOf = ex => 1 + (ex.mech === 'compound' ? -0.15 : 0.15) * fMix;
+  const bodyOf = m => 1 + 0.1 * fBody * (MUSCLE[m].group === 'upper' ? 1 : MUSCLE[m].group === 'lower' ? -1 : 0);
+  const blocksBonus = settings.planBlocksBonus * (1 + 0.2 * fBlocks);
+  const readyAt = Math.max(0.1, Math.min(0.6, settings.readyAt + 0.08 * fRec));
+  const fadeOver = Math.max(0.15, 0.3 + 0.1 * fRec);
+  const jointLimit = 0.75 + 0.05 * fRec;
 
   const planDays = Object.values(state.plan || {}).filter(p => !p.deleted && p.on && p.date >= from && p.date <= to)
     .sort((a, b) => a.date < b.date ? -1 : 1);
@@ -176,6 +188,7 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
     return fitsType(ex, t);
   };
 
+  const lastMain = {};   // exercise -> last day it was planned heavy or fast
   for (const [week, days] of byWeek) {
     const deload = isDeloadWeek(settings, week);
     // sets already done or fixed this week
@@ -238,8 +251,8 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
       const cap = settings.capacity;
       const fresh = m => {
         const f = state0.fm[m];
-        if (f <= settings.readyAt) return 1;
-        return Math.max(0.05, 1 - (f - settings.readyAt) / 0.3);   // still loaded: rapidly less worth training
+        if (f <= readyAt) return 1;
+        return Math.max(0.05, 1 - (f - readyAt) / fadeOver);   // still loaded: rapidly less worth training
       };
       const sessionSets = {};
       for (const it of fixed) { const e = itemEvent(state, it, t); for (const m in e.sets) sessionSets[m] = (sessionSets[m] || 0) + e.sets[m]; }
@@ -252,13 +265,17 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
           if (!MUSCLE[m]) continue;
           const { lo, hi } = muscleTarget(settings, m);
           const v = done[m] + c * sets / 2;
-          let f = marginal(v, lo, hi) * fresh(m);
+          let f = marginal(v, lo, hi) * fresh(m) * bodyOf(m);
           if ((simSets[m] || 0) + c * sets > sessCap(m) + 0.01) f *= 0.3;
           b += c * sets * f;
         }
+        // an exercise is only worth doing if its main muscle can work: helpers being fresh does not rescue it
+        let prime = 1;
+        for (const [m, c] of Object.entries(ex.muscles || {})) if (c >= 0.9 && MUSCLE[m]) prime = Math.min(prime, fresh(m));
+        b *= 0.1 + 0.9 * prime;
         // joints: back off when the joint is already carrying a lot
-        for (const [j, c] of Object.entries(ex.joints || {})) if (c >= 0.5 && state0.fj[j] > 0.75) b *= 0.6;
-        return b;
+        for (const [j, c] of Object.entries(ex.joints || {})) if (c >= 0.5 && state0.fj[j] > jointLimit) b *= 0.6;
+        return b * mixOf(ex);
       };
 
       let chosen = [];
@@ -301,9 +318,36 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
           commit(item);
         }
       } else {
-        // greedy fill by benefit per minute
         const baseSets = Math.max(2, settings.setsPerExercise - (deload ? 1 : 0));
         const painNoted = new Set();
+        // goal: the main lifts go in first, heavy (strength) or fast (power); the rest of the time builds muscle
+        if (goal !== 'size') {
+          const M = MODES[goal];
+          const sets = Math.max(2, M.sets - (deload ? 1 : 0));
+          for (let n = 0; n < (goal === 'strength' ? 3 : 2); n++) {
+            let best = null;
+            for (const ex of pool) {
+              if (ex.mech !== 'compound' || chosenEx.has(ex.id) || !allowed(pd, ex)) continue;
+              const again = usedCount['m:' + ex.id] || 0;
+              if (again >= 2 || (lastMain[ex.id] && diffDays(date, lastMain[ex.id]) < 2)) continue;   // twice a week at most, never two days running
+              if (painCheck(state, ex, date, settings, pain, today)) continue;   // nothing heavy or explosive on a sore area
+              const it = { k: 'ex', ex: ex.id, sets, mode: goal, repLo: M.repLo, repHi: M.repHi, rest: Math.max(ex.rest || 0, M.rest) };
+              const min = itemMinutes(state, it);
+              if (used + min > budgetAll * 0.7 + 1) continue;   // leave room for the rest of the session
+              const prime = Object.entries(ex.muscles || {}).filter(([m, c]) => c >= 0.9 && MUSCLE[m]);
+              if (goal === 'power' && prime.some(([m]) => fresh(m) < 0.5)) continue;   // fast work needs fresh muscles
+              // strength likes each lift twice a week: the lift you already did heavy this week comes back once
+              const b = benefitOf(ex.id, sets) / mixOf(ex) * (ex.cost > 1.2 ? 1.15 : 1) * (again === 1 ? (goal === 'strength' ? 1.3 : 0.5) : 1);
+              if (b / sets > 0.16 && (!best || b > best.b)) best = { it, b, ex };
+            }
+            if (!best) break;
+            commit({ ...best.it, id: uid('i'), src: 'auto' });
+            chosenEx.add(best.ex.id); lastMain[best.ex.id] = date;
+            usedCount['m:' + best.ex.id] = (usedCount['m:' + best.ex.id] || 0) + 1;
+            usedCount[best.ex.id] = (usedCount[best.ex.id] || 0) + 1;
+          }
+        }
+        // greedy fill by benefit per minute
         for (let guard = 0; guard < 30; guard++) {
           let best = null;
           for (const ex of pool) {
@@ -329,7 +373,7 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
             if (used + min > budgetAll + 1) continue;
             let b = 0; const sim = { ...sessionSets };
             for (const e of exs) { b += benefitOf(e.id, rounds, sim); for (const [m, c] of Object.entries(e.muscles)) sim[m] = (sim[m] || 0) + c * rounds; }
-            b *= settings.planBlocksBonus * Math.pow(0.9, usedCount['b:' + bl.id] || 0);
+            b *= blocksBonus * Math.pow(0.9, usedCount['b:' + bl.id] || 0);
             const score = b / min;
             if (b / (rounds * exs.length) > 0.16 && (!best || score > best.score)) best = { it, score, block: bl };
           }
@@ -344,7 +388,7 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
         for (let guard = 0; guard < 12; guard++) {
           let best = null;
           for (const it of chosen) {
-            if (it.k !== "ex" || it.sets >= 4) continue;
+            if (it.k !== "ex" || it.mode || it.sets >= 4) continue;
             const ex = getEx(state, it.ex);
             const min = (WORK_SEC + (ex.rest || 90)) / 60;
             if (used + min > budgetAll + 1) continue;
@@ -360,9 +404,11 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
         if (!chosen.length && !fixed.length) out.notes.push(pool.length ? 'Nothing useful fits: the muscles this day targets are still loaded or already at their weekly target.' : 'Add exercises to "My exercises" so the planner has something to work with.');
       }
 
-      // order: big compounds first, then blocks, then isolation, core last
+      // order: fast work first (it needs you fresh), then heavy lifts, big compounds, blocks, isolation, core last
       const rank = it => {
-        if (it.k === 'cardio') return -1;
+        if (it.k === 'cardio') return -3;
+        if (it.mode === 'power') return -2;
+        if (it.mode === 'strength') return -1;
         if (it.k === 'block') return 2;
         const ex = getEx(state, it.ex); const pm = primaryMuscle(ex);
         if (MUSCLE[pm]?.group === 'core') return 4;
@@ -392,4 +438,62 @@ export function weekProjection(state, an, week, today = ymd()) {
     }
   }
   return sets;
+}
+
+// ---------- committing many days at once, and clearing a month
+
+/** Ready-made weekly patterns. Keys are weekdays, Monday = 0. Values are workout types. */
+export const PATTERNS = [
+  { id: 'full3', name: '3 days, full body', days: { 0: 'full', 2: 'full', 4: 'full' } },
+  { id: 'ul4', name: '4 days, upper and lower', days: { 0: 'upper', 1: 'lower', 3: 'upper', 4: 'lower' } },
+  { id: 'ppl3', name: '3 days, push, pull, legs', days: { 0: 'push', 2: 'pull', 4: 'legs' } },
+  { id: 'auto4', name: '4 days, planner decides', days: { 0: 'auto', 1: 'auto', 3: 'auto', 5: 'auto' } },
+];
+
+const committed = (state, date) => { const p = state.plan?.[date]; return !!(p && !p.deleted && p.on); };
+const trainedOn = (state, date) => Object.values(state.sessions || {}).some(s => !s.deleted && s.date === date && s.items?.length);
+
+/**
+ * The days a weekly pattern would commit, from `from` to the end of the last of `weeks` weeks.
+ * pattern: { weekday (Mon = 0): type id or 'preset:<id>' }. Days already committed are counted, not touched.
+ */
+export function patternDays(state, pattern, from, weeks, limit) {
+  const end = addDays(weekStart(from), weeks * 7 - 1);
+  const add = [], kept = [];
+  for (let d = from; d <= end && (!limit || d <= limit); d = addDays(d, 1)) {
+    const wd = (parseYmd(d).getDay() + 6) % 7;
+    const what = pattern?.[wd];
+    if (!what) continue;
+    if (committed(state, d)) kept.push(d); else add.push({ date: d, what });
+  }
+  return { add, kept, end: limit && end > limit ? limit : end };
+}
+
+/** The pattern this week's commitments make, so it can be repeated. */
+export function patternFromWeek(state, week) {
+  const out = {};
+  for (let i = 0; i < 7; i++) {
+    const pd = state.plan?.[addDays(week, i)];
+    if (!pd || pd.deleted || !pd.on) continue;
+    const pres = dayPresets(state, pd);
+    out[i] = pres.length ? 'preset:' + pres[0].id : (TYPE[pd.type] && pd.type !== 'rest' ? pd.type : 'auto');
+  }
+  return out;
+}
+
+/** A plan-day record for one pattern day. */
+export function patternRecord(state, { date, what }) {
+  if (what.startsWith('preset:')) {
+    const p = state.presets?.[what.slice(7)];
+    if (p && !p.deleted) return { date, on: true, type: 'custom', items: presetItems(state, p) };
+    return { date, on: true, type: 'auto', items: [] };
+  }
+  return { date, on: true, type: TYPE[what] ? what : 'auto', items: [] };
+}
+
+/** Commitments in a month (YYYY-MM) that can still be cleared: today or later, and not trained yet. */
+export function monthCommitments(state, month, today = ymd()) {
+  return Object.values(state.plan || {})
+    .filter(p => !p.deleted && p.on && p.date.slice(0, 7) === month && p.date >= today && !trainedOn(state, p.date))
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
 }

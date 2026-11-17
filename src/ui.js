@@ -148,3 +148,11 @@ export function numInput(value, onInput, attrs = {}) {
     onKeydown: e => { if (e.key === 'Enter') e.target.blur(); } });
   return el;
 }
+
+/** A five-stop slider from -2 to +2 with a label at each end. */
+export function slider(value, onChange, { left, right, label, text }) {
+  const inp = h('input', { type: 'range', min: -2, max: 2, step: 1, value: value || 0, 'aria-label': label, 'aria-valuetext': text ? text(value || 0) : null,
+    onInput: e => { const v = Number(e.target.value); if (text) e.target.setAttribute('aria-valuetext', text(v)); onChange(v); } });
+  return h('div', { class: 'sld' }, h('div', { class: 'ticks' }, [0, 1, 2, 3, 4].map(i => h('i', { class: i === 2 ? 'mid' : '' }))), inp,
+    h('div', { class: 'ends' }, h('span', null, left), h('span', null, right)));
+}
