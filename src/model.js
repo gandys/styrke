@@ -101,9 +101,15 @@ export function epley(load, reps) {
   return load * (1 + Math.min(reps, 30) / 30);
 }
 
-/** How "hard" a set was, 0..1, from reps in reserve (RIR). <=4 RIR counts as a full hard set. */
-export function hardnessFromRir(rir) {
-  return clamp(1 - (rir - 4) / 6, 0, 1);
+/**
+ * How "hard" a set was, 0..1, from reps in reserve (RIR) and the reps done.
+ * Anything from about 5 to 30 reps builds muscle about equally when the set ends close to failure,
+ * so reps in reserve are weighed against the length of the set: up to 4 left on a 10-rep set counts fully,
+ * and so do up to 10 left on a 25-rep set, where estimates are rougher anyway. 8 left on a 10-rep set counts nothing.
+ */
+export function hardnessFromRir(rir, reps = 10) {
+  const k = rir * 10 / clamp(reps, 10, 25);
+  return clamp(1 - (k - 4) / 4, 0, 1);
 }
 
 /** Strength stimulus of a set from how heavy it was against your estimated best: nothing up to 75%, full from 80%. */
@@ -205,10 +211,10 @@ export function analyze(state) {
         // effort
         let hard;
         if (st.f === 'w') hard = 0;
-        else if (st.rir != null) hard = hardnessFromRir(st.rir);
+        else if (st.rir != null) hard = hardnessFromRir(st.rir, st.r);
         else if (st.load > 0 && refE > 0) {
           const maxR = 30 * (refE / st.load - 1);
-          hard = hardnessFromRir(Math.max(0, maxR - st.r));
+          hard = hardnessFromRir(Math.max(0, maxR - st.r), st.r);
         } else hard = refReps ? clamp((st.r / refReps - 0.4) / 0.4, 0, 1) : 1;
         if (st.f === 'd') hard = Math.max(hard, 0.5);
         if (st.f === 'h') hard = 1;

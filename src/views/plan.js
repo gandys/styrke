@@ -40,8 +40,10 @@ export function applyPlan(res) {
   if (n) commit('plan');
   return n;
 }
+let plannerNotes = [];   // what the last run of the planner wants you to know
 export function runAutoPlan(from, to) {
   const res = autoPlan(state, analyze(state), { from, to });
+  plannerNotes = res.notes || [];
   return applyPlan(res);
 }
 /** Plan a single day now (creates the commitment if needed). */
@@ -128,7 +130,8 @@ export function renderPlan(root, ctx) {
   const presets = Object.values(state.presets).filter(p => !p.deleted);
   const planner = h('div', { class: 'panel' },
     h('h2', null, 'Automatic planner'),
-    h('p', { class: 'note', style: { marginBottom: '12px' } }, 'Fills your committed days so each muscle gets its weekly sets, is trained once it has recovered, and the session fits your time. Days you typed or filled by hand are respected.'),
+    h('p', { class: 'note', style: { marginBottom: '12px' } }, 'Plans each week as a whole for the most muscle growth: it spreads every muscle\'s sets over your days, puts muscles far from their target first, waits for tired muscles and keeps your legs fresh for runs. Sessions fit your time. Days you filled by hand are respected. ',
+      h('a', { href: '#more', onClick: e => { e.preventDefault(); ctx.go('more', 'science'); } }, 'How it decides')),
     h('div', { class: 'stack' },
       seg([{ id: 7, name: 'This week' }, { id: 14, name: 'Next 14 days' }, { id: 28, name: '4 weeks' }, { id: HORIZON, name: 'All' }], range, v => { range = v; ctx.refresh(); }),
       presets.length ? seg([{ id: 'exercises', name: 'Build from my exercises' }, { id: 'presets', name: 'Hand out my presets' }], settings.planMode || 'exercises', v => setSetting('planMode', v)) : null,
@@ -141,7 +144,8 @@ export function renderPlan(root, ctx) {
       h('button', { class: 'btn primary block', disabled: !inRange.length, onClick: () => {
         const n = runAutoPlan(today, to);
         toast(n ? `Planned ${n} ${n === 1 ? 'day' : 'days'}` : 'No committed days in that range'); ctx.refresh();
-      } }, icon('bolt'), inRange.length ? `Plan ${inRange.length} committed ${inRange.length === 1 ? 'day' : 'days'}` : 'Commit to some days first')));
+      } }, icon('bolt'), inRange.length ? `Plan ${inRange.length} committed ${inRange.length === 1 ? 'day' : 'days'}` : 'Commit to some days first'),
+      plannerNotes.length ? h('div', { class: 'banner info', style: { margin: 0 } }, icon('info'), h('div', null, plannerNotes.map(n => h('div', null, n)))) : null));
 
   // ---- week projection
   const projWeek = wk;

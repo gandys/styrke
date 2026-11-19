@@ -43,7 +43,12 @@ test('hard sets: warm-ups do not count, sets near failure do', () => {
   const d = an.days.get('2026-11-05');
   assert.ok(d.muscles.chest > 2 && d.muscles.chest < 3.2, 'chest sets ' + d.muscles.chest);
   assert.ok(Math.abs(d.muscles.triceps - d.muscles.chest * 0.5) < 1e-9);
-  assert.equal(hardnessFromRir(0), 1); assert.equal(hardnessFromRir(10), 0);
+  assert.equal(hardnessFromRir(0), 1); assert.equal(hardnessFromRir(10), 0);   // 10 reps with 10 left
+  // reps in reserve are weighed against the length of the set
+  assert.equal(hardnessFromRir(4, 10), 1); assert.equal(hardnessFromRir(8, 10), 0);
+  assert.equal(hardnessFromRir(6, 24), 1);                      // 24 reps, 6 left: about as hard as 2 left on a 10-rep set
+  assert.ok(hardnessFromRir(19, 26) < 0.15);                     // a long, easy warm-up is not a hard set
+  assert.ok(hardnessFromRir(6, 8) < 0.7 && hardnessFromRir(6, 25) === 1);
 });
 
 test('load builds with work, fades with rest, differs by muscle', () => {

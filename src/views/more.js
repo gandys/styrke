@@ -10,7 +10,7 @@ import { importFile, importPlan, examplePlan } from '../importers.js';
 import { syncState, syncNow, syncKind, testGithub, cleanRepo, saveFile, shareFile, isAndroid, inArtifact } from '../sync.js';
 import { ymd, norm, fmtDate, weekStart, fmtNum } from '../util.js';
 import { editExercise, editBlock, editPreset, muscleSummary, markMine, exName, blockMinutes, itemLabel, presetSummary } from './common.js';
-import { planMinutes } from '../planner.js';
+import { planMinutes, sessionValue, weekValue } from '../planner.js';
 
 const VERSION = typeof __VERSION__ !== 'undefined' ? __VERSION__ : 'dev';
 let page = 'menu';
@@ -220,12 +220,13 @@ function science(root, ctx) {
   const badge = (letter, cls, title, text) => h('div', { class: 'hbadge' }, h('span', { class: 'n ' + cls }, letter), h('div', null, h('b', null, title), h('div', { class: 'note' }, text)));
 
   // 1 ---- hard sets
-  const hard = card(1, 'Which sets count', 'Only sets that end close to your limit count as "hard sets". Warm-ups drop out on their own.',
+  const hard = card(1, 'Which sets count', 'Only sets that end close to your limit count as "hard sets". From about 5 to 30 reps, a set near your limit builds muscle about equally. Warm-ups drop out on their own.',
     h('div', { class: 'tank' },
       h('div', { class: 'tankbar' }, h('i', { style: { flex: 5, background: 'var(--accent)' } }), h('i', { style: { flex: 6, background: 'linear-gradient(90deg, var(--accent), var(--raised))' } }), h('i', { style: { flex: 5, background: 'var(--raised)' } })),
-      h('div', { class: 'tanklab' }, h('span', { style: { flex: 5 } }, h('b', null, '0–4 reps left'), 'counts as 1 set'), h('span', { style: { flex: 6 } }, h('b', null, '5–9 left'), 'counts partly'), h('span', { style: { flex: 5 } }, h('b', null, '10+ left'), 'counts as 0'))),
+      h('div', { class: 'tanklab' }, h('span', { style: { flex: 5 } }, h('b', null, '0–4 reps left'), 'counts as 1 set'), h('span', { style: { flex: 6 } }, h('b', null, '5–7 left'), 'counts partly'), h('span', { style: { flex: 5 } }, h('b', null, '8+ left'), 'counts as 0'))),
+    h('p', { class: 'note', style: { margin: '6px 0 0' } }, 'That is for a set of about 10 reps. Longer sets may have more left and still count: up to 10 left on a 25-rep set.'),
     h('div', { class: 'sub' }, 'Example: incline press, best recent set 27.5 kg × 11'),
-    meter('15 kg × 26', 0, 1, 'var(--accent)', '0'), meter('22.5 kg × 16', 0.45, 1, 'var(--accent)', '0.5'), meter('27.5 kg × 11', 1, 1, 'var(--accent)', '1'),
+    meter('15 kg × 26', 0.08, 1, 'var(--accent)', '0'), meter('20 kg × 20', 1, 1, 'var(--accent)', '1'), meter('27.5 kg × 11', 1, 1, 'var(--accent)', '1'),
     h('div', { class: 'sub' }, 'You can overrule the estimate: tap a set number'),
     badge('2', '', 'Number', 'Normal set. The app estimates how hard it was.'),
     badge('W', 'w', 'Warm-up', 'Logged, but never counts.'),
@@ -244,7 +245,8 @@ function science(root, ctx) {
   // 3 ---- weekly targets: diminishing returns
   const tg = muscleTarget(s, 'biceps');
   const W = 320, H = 150, L = 8, B = 24, maxX = 24;
-  const fx = v => L + (W - L - 8) * v / maxX, fy = v => (H - B) - (H - B - 12) * Math.sqrt(v / maxX);
+  const vmax = Math.max(...Array.from({ length: maxX * 2 + 1 }, (_, k) => weekValue(k / 2, tg.lo, tg.hi)));
+  const fx = v => L + (W - L - 8) * v / maxX, fy = v => (H - B) - (H - B - 12) * Math.max(0, weekValue(v, tg.lo, tg.hi)) / vmax;
   let d = ''; for (let v = 0; v <= maxX; v += 0.5) d += (v ? 'L' : 'M') + fx(v).toFixed(1) + ',' + fy(v).toFixed(1);
   const curve = h('svg', { viewBox: `0 0 ${W} ${H}`, class: 'hsvg', role: 'img', 'aria-label': 'Benefit rises quickly for the first sets and flattens out' },
     h('rect', { x: fx(tg.lo), y: 6, width: fx(tg.hi) - fx(tg.lo), height: H - B - 6, fill: 'var(--good)', opacity: 0.16 }),
@@ -252,10 +254,10 @@ function science(root, ctx) {
     h('path', { d, fill: 'none', stroke: c1, 'stroke-width': 2.5, 'stroke-linecap': 'round' }),
     h('circle', { cx: fx(4), cy: fy(4), r: 4.5, fill: c1, stroke: 'var(--panel)', 'stroke-width': 2 }),
     h('text', { x: fx(4) + 8, y: fy(4) + 14, class: 'htx' }, 'about 4: the least that works'),
-    h('text', { x: (fx(tg.lo) + fx(tg.hi)) / 2, y: 20, class: 'htx', 'text-anchor': 'middle', style: { fill: 'var(--good)' } }, 'your target'),
+    h('text', { x: (fx(tg.lo) + fx(tg.hi)) / 2, y: H - B - 8, class: 'htx', 'text-anchor': 'middle', style: { fill: 'var(--good)' } }, 'your target'),
     [0, 4, 8, 12, 16, 20, 24].map(v => h('text', { x: fx(v), y: H - 7, class: 'htx', 'text-anchor': 'middle' }, v)),
     h('text', { x: W - 8, y: H - B - 6, class: 'htx', 'text-anchor': 'end' }, 'hard sets per week'));
-  const targets = card(3, 'How many sets a week', 'The first sets do the most. Each extra set adds a little less, so the planner stops at the top of your target.',
+  const targets = card(3, 'How many sets a week', 'The first sets do the most. Each extra set adds a little less, and past the top of your target more sets cost more recovery than they give.',
     curve, h('p', { class: 'note' }, `The green band is your biceps target (${tg.lo}–${tg.hi}). Change any muscle's target in Settings.`),
     more(h('p', null, 'Research is clear that more weekly sets build more muscle with diminishing returns, and that around 11 sets for one muscle in a single session is where extra sets stop showing a benefit. Strength flattens out much sooner than size.'),
       h('p', null, 'The exact target for each muscle is a coaching default, not a law. Evidence that particular muscles need different amounts is thin, so adjust to how you respond.')));
@@ -308,6 +310,27 @@ function science(root, ctx) {
       h('p', null, 'The same review found no clear benefit from planned variation of the programme, from particular rest lengths, or from machines against free weights. So the app does not track those.'),
       h('p', null, 'What the review does not cover: how fast each muscle recovers, joint load and pain. Those parts of the app are reasoned estimates you can adjust in Settings.')));
 
+  // 9 ---- how the planner builds a week
+  const PW = 320, PH = 120, PB = 22, n = 12, bw = (PW - 16) / n;
+  const per = Array.from({ length: n }, (_, k) => sessionValue(k + 1) - sessionValue(k));
+  const perSession = h('svg', { viewBox: `0 0 ${PW} ${PH}`, class: 'hsvg', role: 'img', 'aria-label': 'Sets 1 to 6 for one muscle in one session count fully; each set after that counts less' },
+    h('line', { x1: 8, x2: PW - 8, y1: PH - PB, y2: PH - PB, class: 'hax' }),
+    per.map((v, k) => h('rect', { x: 8 + k * bw + 3, y: (PH - PB) - (PH - PB - 10) * v, width: bw - 6, height: (PH - PB - 10) * v, rx: 3, fill: c1, opacity: k < 6 ? 1 : 0.45 + 0.4 * v })),
+    [1, 6, 12].map(k => h('text', { x: 8 + (k - 0.5) * bw, y: PH - 6, class: 'htx', 'text-anchor': 'middle' }, String(k))),
+    h('text', { x: 8 + 7.4 * bw, y: 28, class: 'htx' }, 'from the 7th set: less'));
+  const rule = (title, text) => h('div', { class: 'hbadge' }, h('span', { class: 'dot', style: { background: 'var(--accent)' } }), h('div', null, h('b', null, title), h('div', { class: 'note' }, text)));
+  const plannerCard = card(9, 'How the planner builds your week', 'It plans all the days you committed to in a week together. One piece at a time, it adds whatever gives the most growth per minute, until nothing worth the effort fits.',
+    h('div', { class: 'sub' }, 'Sets for one muscle in one session: what each one adds'),
+    perSession,
+    rule('Spread over the week', 'Because sets beyond about 6 in one session add less, a muscle\'s sets go on two or three days rather than one.'),
+    rule('Furthest behind first', 'A muscle far below its weekly target gets priority over one that is nearly there (card 3).'),
+    rule('Fresh muscles', 'Sets on a muscle that still carries load, from the gym or a run, count for less. If an exercise\'s main muscle is tired, the whole exercise counts for less. The Recovery slider sets how strict this is.'),
+    rule('Legs fresh for runs', 'Leg work that would still be in your legs when a planned run starts counts against itself, so leg sessions move away from the day before a run.'),
+    rule('Every set has a price', 'Each set costs recovery. When the next set gives less than it costs, the planner stops, even if time is left.'),
+    rule('Most growth per minute', 'Exercises that train several muscles are efficient. A 4th and 5th set of the same exercise count a bit less, because reps drop as sets pile up.'),
+    more(h('p', null, 'From the research: more weekly sets build more muscle with diminishing returns; helper muscles count about half; past roughly 6 to 10 sets for one muscle in one session the extra sets show little benefit; with the same weekly sets, how often you train a muscle makes little difference; and anything from about 5 to 30 reps near your limit builds muscle about equally.'),
+      h('p', null, 'Reasoned estimates, not measured: how fast each muscle recovers, how much a tired muscle loses, the cost of each set, the cost of tired legs before a run, and how much a 4th or 5th set is worth. Adjust targets and recovery speeds in Settings, and the planner\'s character under Plan, Goal and priorities.')));
+
   // 6 ---- whole-body load
   const ls = an.sessions.length ? loadSeries(an, ymd(), ymd()) : [];
   const ratio = ls.length ? ls[0].ratio : null;
@@ -336,5 +359,5 @@ function science(root, ctx) {
   const sources = h('div', { class: 'panel prose' }, h('h3', { style: { marginTop: 0 } }, 'Sources'),
     h('p', null, a('Currier et al. 2026, ACSM position stand on resistance training', 'https://journals.lww.com/acsm-msse/'), '. ', a('Pelland et al., weekly volume and frequency', 'https://sportrxiv.org/index.php/server/preprint/view/460'), '. ', a('Remmert et al., per-session volume', 'https://sportrxiv.org/index.php/server/preprint/view/537'), '. ', a('Silbernagel et al. 2007, pain-monitoring model', 'https://search.pedro.org.au/search-results/record-detail/18389'), '. ', a('Critique of the acute:chronic workload ratio', 'https://nata.kglmeridian.com/view/journals/attr/55/9/article-p893.xml'), '.'));
 
-  root.appendChild(h('div', { class: 'cols' }, h('div', null, hard, perMuscle, targets, stim, painC), h('div', null, fade, wav, body, sources)));
+  root.appendChild(h('div', { class: 'cols' }, h('div', null, hard, perMuscle, targets, stim, painC), h('div', null, fade, wav, body, plannerCard, sources)));
 }

@@ -2,7 +2,7 @@
 // muscle gets its weekly dose, is trained when it has recovered, and the session fits the clock.
 
 import { MUSCLES, MUSCLE, JOINT, TYPE, fitsType, primaryMuscle } from './library.js';
-import { getEx, getSettings, muscleTarget, loadAt, currentPain, cardioUnits, isDeloadWeek, myExercises, MODES } from './model.js';
+import { getEx, getSettings, muscleTarget, loadAt, currentPain, cardioUnits, isDeloadWeek, myExercises, MODES, halfLife } from './model.js';
 import { addDays, weekStart, parseYmd, ymd, uid, diffDays } from './util.js';
 
 const WORK_SEC = 40;      // time under the bar per set
@@ -132,16 +132,56 @@ export function painCheck(state, ex, date, settings = getSettings(state), pain =
   return worst;
 }
 
-function marginal(v, lo, hi) {
-  const base = 1 / Math.sqrt(1 + v);
-  if (v < lo) return 1.6 * base;
-  if (v < hi) return base;
-  return 0.12 * base;
+// ---------- the growth model the planner maximises
+// Each piece follows the training research where it exists, and is a reasoned estimate where it does not.
+
+/** Sets for one muscle in one session: full value up to 6, then less and less (about 10 is the ceiling). */
+export function sessionValue(s) {
+  return s <= 6 ? s : 6 + 4 * (1 - Math.exp(-(s - 6) / 4));
+}
+
+/** How well a muscle can be trained when it still carries load f (fraction of capacity): 1 when recovered. */
+export function readiness(f, readyAt = 0.25, span = 0.6, floor = 0.2) {
+  return f <= readyAt ? 1 : Math.max(floor, 1 - (f - readyAt) / span);
 }
 
 /**
+ * Value of W effective hard sets in a week for a muscle with target band lo..hi.
+ * Growth rises with weekly sets with diminishing returns: the first sets of the week count the most,
+ * and each extra set adds less (a logarithmic curve, scaled to the muscle's target). Sets that bring a
+ * muscle up to the bottom of its band get a little extra weight, and its first 3 sets of the week a lot more:
+ * a muscle left at zero for a week starts to lose what it built, while about a third of the usual sets keeps it. Above the band
+ * the gain fades quickly and then turns into a small cost: more fatigue for almost no growth.
+ */
+const OVER = 1.5, OVER_COST = 0.3, BELOW = 0.3, FIRST = 2, FIRST_SETS = 3;
+const midOf = (lo, hi) => Math.max(2, (lo + hi) / 2);
+export function weekMarginal(W, lo, hi) {
+  const T = midOf(lo, hi);
+  if (W <= hi) return 2 / (1 + 2 * W / T) + (W < lo ? BELOW : 0) + (W < Math.min(FIRST_SETS, lo) ? FIRST : 0);
+  const d = W - hi;
+  return (2 / (1 + 2 * hi / T)) * Math.exp(-d / OVER) - OVER_COST * Math.min(1, d / 2);
+}
+export function weekValue(W, lo, hi) {
+  const T = midOf(lo, hi), below = BELOW * Math.min(W, lo) + FIRST * Math.min(W, FIRST_SETS, lo);
+  if (W <= hi) return T * Math.log(1 + 2 * W / T) + below;
+  const d = W - hi, mh = 2 / (1 + 2 * hi / T);
+  return below + T * Math.log(1 + 2 * hi / T) + mh * OVER * (1 - Math.exp(-d / OVER)) - OVER_COST * (d <= 2 ? d * d / 4 : d - 1);
+}
+
+const MAX_SETS = 5;         // sets of one exercise in one session
+const SET_WORTH = [1, 1, 1, 0.9, 0.75];   // reps drop as sets of the same exercise pile up
+const MIN_GAIN = 0.05;      // stop when the best addition, after its fatigue cost, gains less than this per set
+const FATIGUE_COST = 0.12;  // cost of one unit of load (a hard set for one muscle): recovery you spend on it
+const RUN_COST = 5;         // cost of load still left in a muscle when a planned run (or other cardio) starts; longer runs weigh more
+const SESSION_SETS = 18;    // past this many hard sets in one session, each extra set costs more (the session wears you down)
+const SESSION_COST = 0.02;
+const sessionCost = n => SESSION_COST * Math.max(0, n - SESSION_SETS) ** 2;
+
+/**
  * Build a plan for every committed day between from and to.
- * Returns { days: {date: {items, minutes, notes}}, weeks: {...} } without touching state.
+ * Works one calendar week at a time and plans all of that week's days together, so it can
+ * spread each muscle's sets over the week instead of filling the first day first.
+ * Returns { days: {date: {items, minutes, notes}}, notes, weeks } without touching state.
  */
 export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
   const settings = getSettings(state);
@@ -150,260 +190,378 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
   const blocks = Object.values(state.blocks || {}).filter(b => !b.deleted && b.plan !== false && b.exIds?.length);
   const presets = Object.values(state.presets || {}).filter(p => !p.deleted);
   const usePresets = settings.planMode === 'presets' && presets.some(p => p.plan !== false);
-  const result = { days: {}, notes: [] };
+  const result = { days: {}, notes: [], weeks: {} };
   // priorities
   const goal = MODES[settings.planGoal] ? settings.planGoal : 'size';
   const knob = k => Math.max(-2, Math.min(2, Number(settings[k]) || 0));
-  const fBody = knob('focusBody'), fMix = knob('focusMix'), fBlocks = knob('focusBlocks'), fRec = knob('focusRecovery');
+  const fMix = knob('focusMix'), fBlocks = knob('focusBlocks'), fRec = knob('focusRecovery');
   const mixOf = ex => 1 + (ex.mech === 'compound' ? -0.15 : 0.15) * fMix;
-  const bodyOf = m => 1 + 0.1 * fBody * (MUSCLE[m].group === 'upper' ? 1 : MUSCLE[m].group === 'lower' ? -1 : 0);
   const blocksBonus = settings.planBlocksBonus * (1 + 0.2 * fBlocks);
   const readyAt = Math.max(0.1, Math.min(0.6, settings.readyAt + 0.08 * fRec));
-  const fadeOver = Math.max(0.15, 0.3 + 0.1 * fRec);
+  const span = Math.max(0.15, 0.6 + 0.22 * fRec);
+  const floor = Math.max(0, 0.2 + 0.1 * fRec);   // "only when fresh": a tired muscle is worth nothing
   const jointLimit = 0.75 + 0.05 * fRec;
+  const kappa = FATIGUE_COST * (1 - 0.2 * fRec);
+  const lambda = RUN_COST * (1 - 0.25 * fRec);
 
   const planDays = Object.values(state.plan || {}).filter(p => !p.deleted && p.on && p.date >= from && p.date <= to)
     .sort((a, b) => a.date < b.date ? -1 : 1);
   if (!planDays.length) return result;
 
-  // events already fixed in the future: user-added and imported items on any day (also outside the range)
+  // Load already fixed in the future: what you added by hand or imported (runs, for example) on days in
+  // the range, and whole plans on days outside it. Cardio sits an hour before the gym on the same day.
   const fixedItems = pd => (pd.items || []).filter(it => it.src !== 'auto');
   const extra = [];
+  const pushEvents = (date, items) => {
+    const c = items.filter(i => i.k === 'cardio'), o = items.filter(i => i.k !== 'cardio');
+    if (c.length) { const ev = planDayEvent(state, { date, items: c }); ev.t -= 3600e3; extra.push({ ...ev, date, cardio: true }); }
+    if (o.length) extra.push({ ...planDayEvent(state, { date, items: o }), date });
+  };
   for (const pd of Object.values(state.plan || {})) {
     if (pd.deleted || !pd.on || pd.date < today || planStarted(state, pd.date)) continue;
-    const fi = fixedItems(pd);
     const inRange = pd.date >= from && pd.date <= to;
-    const items = inRange ? fi : (pd.items || []);
-    if (items.length) extra.push({ ...planDayEvent(state, { date: pd.date, items }), date: pd.date });
+    pushEvents(pd.date, inRange ? fixedItems(pd) : (pd.items || []));
   }
+
+  const allowed = (type, ex) => {
+    if (type === 'rest' || type === 'custom' || type === 'cardio' || type.startsWith('preset:')) return false;
+    return fitsType(ex, type);
+  };
+  const exInfo = new Map();   // id -> { ex, muscles: [[m, c]], joints, cost }
+  const info = id => {
+    if (exInfo.has(id)) return exInfo.get(id);
+    const ex = getEx(state, id);
+    const r = ex ? { ex, muscles: Object.entries(ex.muscles || {}).filter(([m]) => MUSCLE[m]), joints: Object.entries(ex.joints || {}), cost: ex.cost || 1 } : null;
+    exInfo.set(id, r); return r;
+  };
+  // muscles nothing in your pool can train
+  const reachable = new Set();
+  for (const ex of pool) for (const m in ex.muscles || {}) if (ex.muscles[m] >= 0.4) reachable.add(m);
+  const lastMain = {};   // exercise -> last day it was planned heavy or fast
+  const usedPreset = {};
 
   // group by week
   const byWeek = new Map();
   for (const pd of planDays) { const w = weekStart(pd.date); if (!byWeek.has(w)) byWeek.set(w, []); byWeek.get(w).push(pd); }
 
-  const allowed = (pd, ex) => {
-    const t = pd.type || 'auto';
-    if (t === 'rest' || t === 'custom' || t === 'cardio') return false;
-    if (t.startsWith('preset:')) return false;
-    return fitsType(ex, t);
-  };
-
-  const lastMain = {};   // exercise -> last day it was planned heavy or fast
-  for (const [week, days] of byWeek) {
+  for (const [week, wdays] of byWeek) {
     const deload = isDeloadWeek(settings, week);
-    // sets already done or fixed this week
+    const weekEnd = addDays(week, 7);
+    // effective sets already in the bag this week: logged work, and fixed work on days the planner does not fill
     const done = {};
     for (const m of MUSCLES) done[m.id] = 0;
-    for (let d = week; d < addDays(week, 7); d = addDays(d, 1)) {
-      if (d < today) { const day = an.days.get(d); if (day) for (const m in day.muscles) done[m] += day.muscles[m]; }
-      else if (d === today) { const day = an.days.get(d); if (day) for (const m in day.muscles) done[m] += day.muscles[m]; }
-    }
-    for (const ev of extra) if (ev.date >= week && ev.date < addDays(week, 7)) for (const m in ev.sets) done[m] = (done[m] || 0) + ev.sets[m];
+    for (let d = week; d < weekEnd && d <= today; d = addDays(d, 1)) { const day = an.days.get(d); if (day) for (const m in day.muscles) done[m] += day.muscles[m]; }
 
-    // how many of this week's days can train each muscle -> per-session cap
-    const eligible = {};
-    for (const m of MUSCLES) eligible[m.id] = 0;
-    for (const pd of days) {
-      const t = pd.type || 'auto';
-      if (t === 'rest' || t === 'custom' || t === 'cardio') continue;
-      const ms = t.startsWith('preset:') || !TYPE[t]?.m ? MUSCLES.map(m => m.id) : TYPE[t].m;
-      for (const m of ms) eligible[m]++;
-    }
-    const usedCount = {};
-
-    for (const pd of days) {
-      const date = pd.date;
-      const type = pd.type || 'auto';
+    // ----- the days of this week
+    const D = [];
+    for (const pd of wdays) {
+      const date = pd.date, type = pd.type || 'auto';
+      const fixed = fixedItems(pd);
       const out = { items: [], notes: [], minutes: 0 };
       result.days[date] = out;
-      const fixed = fixedItems(pd);
-      const budgetAll = (pd.minutes || settings.maxMinutes) * (deload ? 0.85 : 1);
-      // cardio you already fixed for the day counts half against the gym clock (unless set to count fully)
-      const fixedCardioMin = fixed.filter(i => i.k === 'cardio').reduce((a, i) => a + itemMinutes(state, i), 0);
-      let used = planMinutes(state, fixed.filter(i => i.k !== 'cardio')) + fixedCardioMin * (settings.cardioInBudget ? 1 : 0.5);
-      const t = dayTime(date);
-      const ahead = Math.max(0, diffDays(date, today));
-      if (deload) out.notes.push('Lighter week: one set fewer per exercise.');
-
-      // pain notes on fixed items
       for (const it of fixed) {
         const ex = it.k !== 'block' ? getEx(state, it.ex) : null;
         const pc = ex && painCheck(state, ex, date, settings, pain, today);
         if (pc) out.notes.push(`${JOINT[pc.region].name} ${pc.pain}/10: ${pc.level === 'avoid' ? 'consider moving or swapping' : 'go easy on'} ${it.name || ex.name}.`);
       }
+      if (deload) out.notes.push('Lighter week: one set fewer per exercise.');
       out.notes = [...new Set(out.notes)];
-
-      if (type === 'rest' || type === 'custom') { out.items = fixed; out.minutes = planMinutes(state, fixed); continue; }
-
+      if (type === 'rest' || type === 'custom') {
+        out.items = fixed; out.minutes = planMinutes(state, fixed);
+        for (const it of fixed) { const e = itemEvent(state, it, 0); for (const m in e.sets) if (m in done) done[m] += e.sets[m]; }
+        continue;
+      }
       if (type === 'cardio') {
         const items = [...fixed];
         if (!fixed.some(i => i.k === 'cardio')) {
           const cardio = myExercises(state).filter(e => e.kind === 'cardio');
-          let pick = cardio.find(e => !painCheck(state, e, date, settings, pain, today)) || cardio[0];
-          if (pick) items.push({ id: uid('i'), k: 'cardio', ex: pick.id, min: Math.min(40, Math.round(budgetAll)), rpe: 4, src: 'auto' });
+          const pick = cardio.find(e => !painCheck(state, e, date, settings, pain, today)) || cardio[0];
+          const budget = (pd.minutes || settings.maxMinutes) * (deload ? 0.85 : 1);
+          if (pick) { const it = { id: uid('i'), k: 'cardio', ex: pick.id, min: Math.min(40, Math.round(budget)), rpe: 4, src: 'auto' }; items.push(it); pushEvents(date, [it]); }
         }
         out.items = items; out.minutes = planMinutes(state, items);
-        extra.push({ ...planDayEvent(state, { date, items: items.filter(i => i.src === 'auto') }), date });
         continue;
       }
-
-      const state0 = loadAt(an, t, extra.filter(e => e.t <= t));
-      const cap = settings.capacity;
-      const fresh = m => {
-        const f = state0.fm[m];
-        if (f <= readyAt) return 1;
-        return Math.max(0.05, 1 - (f - readyAt) / fadeOver);   // still loaded: rapidly less worth training
+      const t = dayTime(date);
+      const fixedCardioMin = fixed.filter(i => i.k === 'cardio').reduce((a, i) => a + itemMinutes(state, i), 0);
+      const fixedOther = fixed.filter(i => i.k !== 'cardio');
+      const day = {
+        date, type, t, out, fixed, pd,
+        budget: (pd.minutes || settings.maxMinutes) * (deload ? 0.85 : 1),
+        base: planMinutes(state, fixedOther) + fixedCardioMin * (settings.cardioInBudget ? 1 : 0.5),
+        hasStrength: fixedOther.length > 0,
+        items: [], locked: false,
+        fixedS: {}, ahead: Math.max(0, diffDays(date, today)),
       };
-      const sessionSets = {};
-      for (const it of fixed) { const e = itemEvent(state, it, t); for (const m in e.sets) sessionSets[m] = (sessionSets[m] || 0) + e.sets[m]; }
-      const sessCap = m => Math.max(4, Math.min(9, Math.ceil(muscleTarget(settings, m).hi / Math.max(1, eligible[m]) * 1.25)));
+      for (const it of fixedOther) { const e = itemEvent(state, it, t); for (const m in e.sets) day.fixedS[m] = (day.fixedS[m] || 0) + e.sets[m]; }
+      D.push(day);
+    }
+    // fixed work on days after the range in this week is already in the plan: count it
+    for (const pd of Object.values(state.plan || {})) {
+      if (pd.deleted || !pd.on || pd.date < week || pd.date >= weekEnd || (pd.date >= from && pd.date <= to) || pd.date < today || planStarted(state, pd.date)) continue;
+      for (const it of pd.items || []) if (it.k !== 'cardio') { const e = itemEvent(state, it, 0); for (const m in e.sets) if (m in done) done[m] += e.sets[m]; }
+    }
+    if (!D.length) continue;
+    // load each day starts from: logged work, fixed items and earlier weeks' plans (not this week's new plan)
+    for (const day of D) {
+      const l = loadAt(an, day.t, extra.filter(e => e.t < day.t));
+      day.fm = l.fm; day.fj = l.fj; day.capM = l.capM; day.capJ = l.capJ;
+    }
+    const dayIx = new Map(D.map((d, i) => [d.date, i]));
+    const HL = {}; for (const m of MUSCLES) HL[m.id] = halfLife(settings, m.id);
+    const HLJ = {}; for (const j of Object.keys(JOINT)) HLJ[j] = halfLife(settings, j);
+    // how much of day k's load is left on day i, per muscle and joint (computed once)
+    const DM = D.map((a, i) => D.map((b, k) => { const o = {}; if (k < i) for (const m in HL) o[m] = Math.pow(0.5, (a.t - b.t) / 3600e3 / HL[m]) / a.capM[m]; return o; }));
+    // cardio planned in the next three days: the legs should not arrive at it tired from the gym
+    const runCost = D.map(day => {
+      const o = {};
+      for (const ev of extra) {
+        if (!ev.cardio || ev.t <= day.t || ev.t > day.t + 72 * 3600e3) continue;
+        for (const m in ev.muscles) if (HL[m]) o[m] = (o[m] || 0) + lambda * Math.min(3, ev.muscles[m] / 4) * Math.pow(0.5, (ev.t - day.t) / 3600e3 / HL[m]) / day.capM[m];
+      }
+      return o;
+    });
+    const DJ = D.map((a, i) => D.map((b, k) => { const o = {}; if (k < i) for (const j in HLJ) o[j] = Math.pow(0.5, (a.t - b.t) / 3600e3 / HLJ[j]) / a.capJ[j]; return o; }));
 
-      const benefitOf = (exId, sets, simSets = sessionSets) => {
-        const ex = getEx(state, exId); if (!ex) return 0;
-        let b = 0;
-        for (const [m, c] of Object.entries(ex.muscles || {})) {
-          if (!MUSCLE[m]) continue;
-          const { lo, hi } = muscleTarget(settings, m);
-          const v = done[m] + c * sets / 2;
-          let f = marginal(v, lo, hi) * fresh(m) * bodyOf(m);
-          if ((simSets[m] || 0) + c * sets > sessCap(m) + 0.01) f *= 0.3;
-          b += c * sets * f;
-        }
-        // an exercise is only worth doing if its main muscle can work: helpers being fresh does not rescue it
-        let prime = 1;
-        for (const [m, c] of Object.entries(ex.muscles || {})) if (c >= 0.9 && MUSCLE[m]) prime = Math.min(prime, fresh(m));
-        b *= 0.1 + 0.9 * prime;
-        // joints: back off when the joint is already carrying a lot
-        for (const [j, c] of Object.entries(ex.joints || {})) if (c >= 0.5 && state0.fj[j] > jointLimit) b *= 0.6;
-        return b * mixOf(ex);
+    // ----- the plan as numbers: per day, effective sets and load per muscle, load per joint
+    const S = D.map(() => ({})), L = D.map(() => ({})), J = D.map(() => ({}));
+    const itemQ = it => (it.easy ? 0.5 : 1) * (it.jq ?? 1);   // pain and joint caution reduce what a set is worth
+    const contrib = (it, sign, Si = null, Li = null, Ji = null, i = 0) => {
+      const Sx = Si || S[i], Lx = Li || L[i], Jx = Ji || J[i];
+      const add = (id, sets) => {
+        const f = info(id); if (!f) return;
+        const q = itemQ(it) * (it.mode === 'power' ? FAST_CREDIT : 1);
+        // a tired main muscle ends the set early, so the helpers get less out of it too
+        const pq = it.pq?.[id] ?? 1;
+        for (const [m, c] of f.muscles) { Sx[m] = (Sx[m] || 0) + sign * c * sets * q * (c < 0.9 ? pq : 1); Lx[m] = (Lx[m] || 0) + sign * c * sets * f.cost * (it.mode === 'power' ? FAST_CREDIT : 1); }
+        for (const [j, c] of f.joints) Jx[j] = (Jx[j] || 0) + sign * c * sets * 1.25;
       };
+      if (it.k === 'ex') { let n = 0; for (let k = 0; k < it.sets; k++) n += SET_WORTH[Math.min(k, 4)]; add(it.ex, n); }
+      else if (it.k === 'block') for (const id of state.blocks[it.block].exIds) add(id, it.rounds);
+    };
+    // the value of one muscle over the week, given per-day effective sets and load
+    const muscleValue = (m, override) => {
+      const { lo, hi } = muscleTarget(settings, m);
+      let W = done[m] || 0;
+      for (let i = 0; i < D.length; i++) {
+        const s = (D[i].fixedS[m] || 0) + ((override && override.i === i ? override.S : S[i])[m] || 0);
+        if (s <= 0.001) continue;
+        let f = D[i].fm[m] || 0;
+        for (let k = 0; k < i; k++) { const l = (override && override.i === k ? override.L : L[k])[m]; if (l) f += l * DM[i][k][m]; }
+        W += sessionValue(s) * readiness(f, readyAt, span, floor);
+      }
+      return { W, v: weekValue(W, lo, hi) };
+    };
+    const cur = {};
+    const refresh = () => { for (const m of MUSCLES) cur[m.id] = muscleValue(m.id); };
+    refresh();
+    // value gained by putting item `it` on day i (without committing it)
+    const gain = (it, i) => {
+      const Si = { ...S[i] }, Li = { ...L[i] }, Ji = { ...J[i] };
+      contrib(it, 1, Si, Li, Ji);
+      const touched = new Set();
+      const ids = it.k === 'ex' ? [it.ex] : state.blocks[it.block].exIds;
+      for (const id of ids) for (const [m] of info(id)?.muscles || []) touched.add(m);
+      let g = 0;
+      for (const m of touched) g += muscleValue(m, { i, S: Si, L: Li }).v - cur[m].v - (kappa + (runCost[i][m] || 0)) * ((Li[m] || 0) - (L[i][m] || 0));
+      return g;
+    };
+    const jointLoad = (i, j) => {
+      let f = D[i].fj[j] || 0;
+      for (let k = 0; k < i; k++) if (J[k][j]) f += J[k][j] * DJ[i][k][j];
+      return f + (J[i][j] || 0) / D[i].capJ[j];
+    };
+    const jointQ = (i, ids) => {
+      let q = 1;
+      for (const id of ids) for (const [j, c] of info(id)?.joints || []) if (c >= 0.5 && jointLoad(i, j) > jointLimit) q = Math.min(q, 0.6);
+      return q;
+    };
+    // how ready an exercise's main muscles are on day i
+    const primeQ = (i, ids) => {
+      const o = {};
+      for (const id of ids) {
+        let r = 1;
+        for (const [m, c] of info(id)?.muscles || []) {
+          if (c < 0.9) continue;
+          let f = D[i].fm[m] || 0;
+          for (let k = 0; k < i; k++) if (L[k][m]) f += L[k][m] * DM[i][k][m];
+          r = Math.min(r, readiness(f, readyAt, span, floor));
+        }
+        o[id] = r;
+      }
+      return o;
+    };
+    const minutesOf = (day, extraMin = 0) => {
+      const strength = day.hasStrength || day.items.some(x => x.k !== 'cardio');
+      return day.base + day.items.reduce((a, x) => a + itemMinutes(state, x), 0) + extraMin + (strength ? WARMUP_MIN : 0);
+    };
+    const place = (i, it) => { D[i].items.push(it); contrib(it, 1, null, null, null, i); refresh(); };
+    const setsOf = it => it.k === 'ex' ? it.sets * (it.mode === 'power' ? FAST_CREDIT : 1) : it.k === 'block' ? it.rounds * state.blocks[it.block].exIds.length : 0;
+    const daySetCount = i => D[i].items.reduce((a, x) => a + setsOf(x), 0) + D[i].fixed.reduce((a, x) => a + setsOf(x), 0);
+    const sessionDelta = (i, add) => { const n = daySetCount(i); return sessionCost(n + add) - sessionCost(n); };
+    const usedInWeek = id => D.reduce((a, d) => a + d.items.filter(x => (x.k === 'ex' && x.ex === id) || (x.k === 'block' && x.block === id)).length, 0);
+    const onDay = (i, id) => D[i].fixed.some(x => x.ex === id || (x.k === 'block' && (state.blocks[x.block]?.exIds || []).includes(id)))
+      || D[i].items.some(x => x.ex === id || (x.k === 'block' && state.blocks[x.block].exIds.includes(id)));
+    const painNoted = D.map(() => new Set());
+    const painCache = D.map(() => new Map());
+    const painOf = (i, ex) => {
+      if (!painCache[i].has(ex.id)) painCache[i].set(ex.id, painCheck(state, ex, D[i].date, settings, pain, today));
+      const pc = painCache[i].get(ex.id);
+      if (pc?.level === 'avoid' && !painNoted[i].has(pc.region)) { painNoted[i].add(pc.region); D[i].out.notes.push(`${JOINT[pc.region].name} ${pc.pain}/10: exercises that load it are left out.`); }
+      return pc;
+    };
 
-      let chosen = [];
-      const chosenEx = new Set();
-      for (const it of fixed) { if (it.k === 'ex') chosenEx.add(it.ex); if (it.k === 'block') for (const id of (it.exIds || state.blocks?.[it.block]?.exIds || [])) chosenEx.add(id); }
-      const commit = (it) => {
-        chosen.push(it);
-        const e = itemEvent(state, it, t);
-        for (const m in e.sets) { sessionSets[m] = (sessionSets[m] || 0) + e.sets[m]; done[m] = (done[m] || 0) + e.sets[m]; }
-        used += itemMinutes(state, it) + (chosen.length === 1 && !fixed.some(f => f.k !== 'cardio') ? WARMUP_MIN : 0);
-      };
+    // ----- 1. preset days: the best whole preset for each, in date order
+    for (let i = 0; i < D.length; i++) {
+      const day = D[i];
+      const isPresetDay = day.type.startsWith('preset:') || (usePresets && day.type === 'auto');
+      if (!isPresetDay) continue;
+      day.locked = true;
+      let preset = day.type.startsWith('preset:') ? state.presets?.[day.type.slice(7)] : null;
+      if (!preset) {
+        let best = null, bs = -Infinity;
+        for (const p of presets.filter(p => p.plan !== false)) {
+          let g = 0;
+          for (const it of p.items || []) if ((it.k === 'ex' && info(it.ex)) || (it.k === 'block' && state.blocks?.[it.block] && !state.blocks[it.block].deleted)) g += gain(it.k === 'ex' ? { k: 'ex', ex: it.ex, sets: it.sets || 3 } : { k: 'block', block: it.block, rounds: it.rounds || state.blocks[it.block].rounds || 3 }, i);
+          g *= Math.pow(0.8, usedPreset[p.id] || 0);
+          if (g > bs) { bs = g; best = p; }
+        }
+        preset = best;
+        if (preset) { usedPreset[preset.id] = (usedPreset[preset.id] || 0) + 1; day.out.preset = preset.id; day.out.notes.push(`Preset: ${preset.name}`); }
+      }
+      for (const it of preset?.items || []) {
+        const item = { ...it, id: uid('i'), src: 'auto', pre: preset.id };
+        if (item.k === 'ex' || item.k === 'cardio') {
+          const ex = getEx(state, item.ex); if (!ex) continue;
+          const pc = painCheck(state, ex, day.date, settings, pain, today);
+          if (pc?.level === 'avoid') { day.out.notes.push(`${JOINT[pc.region].name} ${pc.pain}/10: left out ${ex.name}.`); continue; }
+          if (pc) { day.out.notes.push(`${JOINT[pc.region].name} ${pc.pain}/10: go easy on ${ex.name}.`); if (item.k === 'ex') item.easy = true; }
+          if (deload && item.k === 'ex') item.sets = Math.max(2, (item.sets || 3) - 1);
+        }
+        if (item.k === 'block' && !state.blocks?.[item.block]) continue;
+        if (minutesOf(day, itemMinutes(state, item)) > day.budget + 3) { day.out.notes.push('Preset trimmed to fit your time.'); break; }
+        if (item.k === 'cardio') day.items.push(item); else place(i, item);
+      }
+    }
 
-      if (type.startsWith('preset:') || (usePresets && type === 'auto')) {
-        // whole presets as the unit
-        let preset = type.startsWith('preset:') ? state.presets?.[type.slice(7)] : null;
-        if (!preset) {
-          let best = null, bs = -1;
-          for (const p of presets.filter(p => p.plan !== false)) {
-            let s = 0;
-            for (const it of p.items || []) {
-              if (it.k === 'ex') s += benefitOf(it.ex, it.sets || 3);
-              else if (it.k === 'block') for (const id of (state.blocks?.[it.block]?.exIds || [])) s += benefitOf(id, it.rounds || state.blocks[it.block].rounds || 3);
-            }
-            s *= Math.pow(0.8, usedCount['p:' + p.id] || 0);
-            if (s > bs) { bs = s; best = p; }
-          }
-          preset = best;
-          if (preset) { usedCount['p:' + preset.id] = (usedCount['p:' + preset.id] || 0) + 1; out.preset = preset.id; out.notes.push(`Preset: ${preset.name}`); }
-        }
-        for (const it of preset?.items || []) {
-          const item = { ...it, id: uid('i'), src: 'auto', pre: preset.id };
-          if (item.k === 'ex' || item.k === 'cardio') {
-            const ex = getEx(state, item.ex); if (!ex) continue;
-            const pc = painCheck(state, ex, date, settings, pain, today);
-            if (pc?.level === 'avoid') { out.notes.push(`${JOINT[pc.region].name} ${pc.pain}/10: left out ${ex.name}.`); continue; }
-            if (pc) out.notes.push(`${JOINT[pc.region].name} ${pc.pain}/10: go easy on ${ex.name}.`);
-            if (deload && item.k === 'ex') item.sets = Math.max(2, (item.sets || 3) - 1);
-          }
-          if (used + itemMinutes(state, item) > budgetAll + 3) { out.notes.push('Preset trimmed to fit your time.'); break; }
-          commit(item);
-        }
-      } else {
-        const baseSets = Math.max(2, settings.setsPerExercise - (deload ? 1 : 0));
-        const painNoted = new Set();
-        // goal: the main lifts go in first, heavy (strength) or fast (power); the rest of the time builds muscle
-        if (goal !== 'size') {
-          const M = MODES[goal];
-          const sets = Math.max(2, M.sets - (deload ? 1 : 0));
-          for (let n = 0; n < (goal === 'strength' ? 3 : 2); n++) {
-            let best = null;
-            for (const ex of pool) {
-              if (ex.mech !== 'compound' || chosenEx.has(ex.id) || !allowed(pd, ex)) continue;
-              const again = usedCount['m:' + ex.id] || 0;
-              if (again >= 2 || (lastMain[ex.id] && diffDays(date, lastMain[ex.id]) < 2)) continue;   // twice a week at most, never two days running
-              if (painCheck(state, ex, date, settings, pain, today)) continue;   // nothing heavy or explosive on a sore area
-              const it = { k: 'ex', ex: ex.id, sets, mode: goal, repLo: M.repLo, repHi: M.repHi, rest: Math.max(ex.rest || 0, M.rest) };
-              const min = itemMinutes(state, it);
-              if (used + min > budgetAll * 0.7 + 1) continue;   // leave room for the rest of the session
-              const prime = Object.entries(ex.muscles || {}).filter(([m, c]) => c >= 0.9 && MUSCLE[m]);
-              if (goal === 'power' && prime.some(([m]) => fresh(m) < 0.5)) continue;   // fast work needs fresh muscles
-              // strength likes each lift twice a week: the lift you already did heavy this week comes back once
-              const b = benefitOf(ex.id, sets) / mixOf(ex) * (ex.cost > 1.2 ? 1.15 : 1) * (again === 1 ? (goal === 'strength' ? 1.3 : 0.5) : 1);
-              if (b / sets > 0.16 && (!best || b > best.b)) best = { it, b, ex };
-            }
-            if (!best) break;
-            commit({ ...best.it, id: uid('i'), src: 'auto' });
-            chosenEx.add(best.ex.id); lastMain[best.ex.id] = date;
-            usedCount['m:' + best.ex.id] = (usedCount['m:' + best.ex.id] || 0) + 1;
-            usedCount[best.ex.id] = (usedCount[best.ex.id] || 0) + 1;
-          }
-        }
-        // greedy fill by benefit per minute
-        for (let guard = 0; guard < 30; guard++) {
+    // ----- 2. goal: heavy (strength) or fast (power) main lifts go first in each session
+    if (goal !== 'size') {
+      const M = MODES[goal];
+      const sets = Math.max(2, M.sets - (deload ? 1 : 0));
+      for (let i = 0; i < D.length; i++) {
+        const day = D[i]; if (day.locked) continue;
+        for (let n = 0; n < (goal === 'strength' ? 3 : 2); n++) {
           let best = null;
           for (const ex of pool) {
-            if (chosenEx.has(ex.id) || !allowed(pd, ex)) continue;
-            const pc = painCheck(state, ex, date, settings, pain, today);
-            if (pc?.level === 'avoid') { if (!painNoted.has(pc.region)) { painNoted.add(pc.region); out.notes.push(`${JOINT[pc.region].name} ${pc.pain}/10: exercises that load it are left out.`); } continue; }
-            const it = { k: 'ex', ex: ex.id, sets: baseSets, repLo: ex.repLo, repHi: ex.repHi };
-            const min = itemMinutes(state, it);
-            if (used + min > budgetAll + 1) continue;
-            let b = benefitOf(ex.id, baseSets) * Math.pow(0.88, usedCount[ex.id] || 0);
-            if (pc) b *= 0.5;
-            const score = b / min;
-            if (b / baseSets > 0.16 && (!best || score > best.score)) best = { it, score, pc, ex };
-          }
-          for (const bl of blocks) {
-            if (bl.exIds.some(id => chosenEx.has(id))) continue;
-            const exs = bl.exIds.map(id => getEx(state, id)).filter(Boolean);
-            if (exs.length !== bl.exIds.length || !exs.every(e => allowed(pd, e))) continue;
-            if (exs.some(e => painCheck(state, e, date, settings, pain, today)?.level === 'avoid')) continue;
-            const rounds = Math.max(2, (bl.rounds || 3) - (deload ? 1 : 0));
-            const it = { k: 'block', block: bl.id, rounds };
-            const min = itemMinutes(state, it);
-            if (used + min > budgetAll + 1) continue;
-            let b = 0; const sim = { ...sessionSets };
-            for (const e of exs) { b += benefitOf(e.id, rounds, sim); for (const [m, c] of Object.entries(e.muscles)) sim[m] = (sim[m] || 0) + c * rounds; }
-            b *= blocksBonus * Math.pow(0.9, usedCount['b:' + bl.id] || 0);
-            const score = b / min;
-            if (b / (rounds * exs.length) > 0.16 && (!best || score > best.score)) best = { it, score, block: bl };
+            if (ex.mech !== 'compound' || onDay(i, ex.id) || !allowed(day.type, ex)) continue;
+            const used = usedInWeek(ex.id);
+            if (used >= 2 || (lastMain[ex.id] && diffDays(day.date, lastMain[ex.id]) < 2)) continue;   // twice a week at most, never two days running
+            if (painCheck(state, ex, day.date, settings, pain, today)) continue;   // nothing heavy or explosive on a sore area
+            const it = { k: 'ex', ex: ex.id, sets, mode: goal, repLo: M.repLo, repHi: M.repHi, rest: Math.max(ex.rest || 0, M.rest) };
+            if (minutesOf(day, itemMinutes(state, it)) > day.budget * 0.7 + 1) continue;   // leave room for the rest of the session
+            const prime = info(ex.id).muscles.filter(([, c]) => c >= 0.9);
+            let ready = 1;
+            for (const [m] of prime) { let f = day.fm[m] || 0; for (let k = 0; k < i; k++) if (L[k][m]) f += L[k][m] * DM[i][k][m]; ready = Math.min(ready, readiness(f, readyAt, span, floor)); }
+            if (goal === 'power' && ready < 0.8) continue;   // fast work needs fresh muscles
+            it.jq = jointQ(i, [ex.id]); it.pq = primeQ(i, [ex.id]);
+            // a heavy lift wants to come back once in the week
+            const b = gain(it, i) * (ex.cost > 1.2 ? 1.15 : 1) * (used === 1 ? (goal === 'strength' ? 1.3 : 0.5) : 1);
+            if (b / sets > MIN_GAIN && (!best || b > best.b)) best = { it, b, ex };
           }
           if (!best) break;
-          const item = { ...best.it, id: uid('i'), src: 'auto' };
-          if (best.pc) { item.easy = true; out.notes.push(`${JOINT[best.pc.region].name} ${best.pc.pain}/10: go easy on ${best.ex.name}.`); }
-          commit(item);
-          if (best.block) { usedCount['b:' + best.block.id] = (usedCount['b:' + best.block.id] || 0) + 1; for (const id of best.block.exIds) chosenEx.add(id); }
-          else { usedCount[best.ex.id] = (usedCount[best.ex.id] || 0) + 1; chosenEx.add(best.ex.id); }
+          place(i, { ...best.it, id: uid('i'), src: 'auto' });
+          lastMain[best.ex.id] = day.date;
         }
-        // spare time left: add a set where it still pays off
-        for (let guard = 0; guard < 12; guard++) {
-          let best = null;
-          for (const it of chosen) {
-            if (it.k !== "ex" || it.mode || it.sets >= 4) continue;
-            const ex = getEx(state, it.ex);
-            const min = (WORK_SEC + (ex.rest || 90)) / 60;
-            if (used + min > budgetAll + 1) continue;
-            const b = benefitOf(it.ex, 1) * (it.easy ? 0.5 : 1);
-            if (b > 0.3 && (!best || b / min > best.score)) best = { it, score: b / min, min };
-          }
-          if (!best) break;
-          best.it.sets++;
-          const ex = getEx(state, best.it.ex);
-          for (const [m, c] of Object.entries(ex.muscles || {})) { sessionSets[m] = (sessionSets[m] || 0) + c; done[m] = (done[m] || 0) + c; }
-          used += best.min;
-        }
-        if (!chosen.length && !fixed.length) out.notes.push(pool.length ? 'Nothing useful fits: the muscles this day targets are still loaded or already at their weekly target.' : 'Add exercises to "My exercises" so the planner has something to work with.');
       }
+    }
 
+    // ----- 3. fill the week: the addition that gains the most per minute, on whichever day it fits best
+    const candidates = () => {
+      const out = [];
+      for (let i = 0; i < D.length; i++) {
+        const day = D[i]; if (day.locked) continue;
+        const room = day.budget + 1 - minutesOf(day);
+        if (room <= 0.5) continue;
+        // another set of an exercise already planned that day
+        for (const it of day.items) {
+          if (it.k !== 'ex' || it.mode || it.src !== 'auto' || it.sets >= MAX_SETS || it.pre) continue;
+          const f = info(it.ex);
+          const min = (WORK_SEC + (it.rest || f.ex.rest || 90)) / 60;
+          if (min > room) continue;
+          out.push({ i, kind: 'set', it, min, sets: 1, pref: mixOf(f.ex) });
+        }
+        // another round of a block already planned that day
+        for (const it of day.items) {
+          if (it.k !== 'block' || it.src !== 'auto' || it.pre) continue;
+          const bl = state.blocks[it.block];
+          if (it.rounds >= Math.max(4, (bl.rounds || 3) + 1)) continue;
+          const min = itemMinutes(state, { ...it, rounds: it.rounds + 1 }) - itemMinutes(state, it);
+          if (min > room) continue;
+          out.push({ i, kind: 'round', it, min, sets: bl.exIds.length, pref: blocksBonus });
+        }
+        // a new exercise, 2 or 3 sets to start
+        for (const ex of pool) {
+          if (!allowed(day.type, ex) || onDay(i, ex.id)) continue;
+          const pc = painOf(i, ex);
+          if (pc?.level === 'avoid') continue;
+          for (const n of [2, 3]) {
+            const sets = Math.max(2, n - (deload && n > 2 ? 1 : 0));
+            const it = { k: 'ex', ex: ex.id, sets, repLo: ex.repLo, repHi: ex.repHi };
+            if (pc) it.easy = true;
+            const min = itemMinutes(state, it);
+            if (min > room) continue;
+            out.push({ i, kind: 'ex', it, min, sets, pref: mixOf(ex) * Math.pow(0.93, usedInWeek(ex.id)), pc });
+          }
+        }
+        // one of your blocks
+        for (const bl of blocks) {
+          const exs = bl.exIds.map(id => info(id)?.ex);
+          if (exs.some(e => !e) || !exs.every(e => allowed(day.type, e)) || bl.exIds.some(id => onDay(i, id))) continue;
+          if (exs.some(e => painOf(i, e)?.level === 'avoid')) continue;
+          const rounds = Math.max(2, (bl.rounds || 3) - (deload ? 1 : 0));
+          const it = { k: 'block', block: bl.id, rounds };
+          if (exs.some(e => painOf(i, e))) it.easy = true;
+          const min = itemMinutes(state, it);
+          if (min > room) continue;
+          out.push({ i, kind: 'block', it, min, sets: rounds * exs.length, pref: blocksBonus * Math.pow(0.9, usedInWeek(bl.id)) });
+        }
+      }
+      return out;
+    };
+    const fill = () => {
+      for (let guard = 0; guard < 200; guard++) {
+        let best = null;
+        for (const c of candidates()) {
+          let g;
+          if (c.kind === 'set' || c.kind === 'round') {
+            const nxt = c.kind === 'set' ? { ...c.it, sets: c.it.sets + 1 } : { ...c.it, rounds: c.it.rounds + 1 };
+            const Si = { ...S[c.i] }, Li = { ...L[c.i] }, Ji = { ...J[c.i] };
+            contrib(c.it, -1, Si, Li, Ji); contrib(nxt, 1, Si, Li, Ji);
+            const touched = new Set((c.kind === 'set' ? [c.it.ex] : state.blocks[c.it.block].exIds).flatMap(id => info(id).muscles.map(([m]) => m)));
+            g = 0; for (const m of touched) g += muscleValue(m, { i: c.i, S: Si, L: Li }).v - cur[m].v - (kappa + (runCost[c.i][m] || 0)) * ((Li[m] || 0) - (L[c.i][m] || 0));
+          } else {
+            const ids = c.kind === 'ex' ? [c.it.ex] : state.blocks[c.it.block].exIds;
+            c.it.jq = jointQ(c.i, ids); c.it.pq = primeQ(c.i, ids);
+            g = gain(c.it, c.i);
+          }
+          g -= sessionDelta(c.i, c.sets);
+          if (g / c.sets < MIN_GAIN) continue;
+          const score = g * c.pref / c.min;
+          if (!best || score > best.score) best = { ...c, g, score };
+        }
+        if (!best) break;
+        if (best.kind === 'set' || best.kind === 'round') { contrib(best.it, -1, null, null, null, best.i); best.it[best.kind === 'set' ? 'sets' : 'rounds']++; contrib(best.it, 1, null, null, null, best.i); refresh(); }
+        else place(best.i, { ...best.it, id: uid('i'), src: 'auto' });
+      }
+    };
+    fill();
+
+    // ----- 4. write the days out
+    const weekOut = {};
+    for (const m of MUSCLES) { const t = muscleTarget(settings, m.id); weekOut[m.id] = { eff: cur[m.id].W, lo: t.lo, hi: t.hi }; }
+    result.weeks[week] = weekOut;
+    for (const day of D) {
+      const out = day.out;
       // order: fast work first (it needs you fresh), then heavy lifts, big compounds, blocks, isolation, core last
       const rank = it => {
         if (it.k === 'cardio') return -3;
@@ -414,15 +572,25 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
         if (MUSCLE[pm]?.group === 'core') return 4;
         return ex?.mech === 'compound' ? (ex.cost > 1.2 ? 0 : 1) : 3;
       };
-      chosen = chosen.map((it, i) => ({ it, i })).sort((a, b) => rank(a.it) - rank(b.it) || a.i - b.i).map(x => x.it);
-      const fixedCardio = fixed.filter(i => i.k === 'cardio'), fixedOther = fixed.filter(i => i.k !== 'cardio');
+      const chosen = day.items.map((it, k) => ({ it, k })).sort((a, b) => (day.locked ? 0 : rank(a.it) - rank(b.it)) || a.k - b.k).map(x => x.it);
+      for (const it of chosen) {
+        delete it.jq; delete it.pq;
+        if (it.easy && it.k === 'ex') { const ex = getEx(state, it.ex), pc = painCheck(state, ex, day.date, settings, pain, today); if (pc) out.notes.push(`${JOINT[pc.region].name} ${pc.pain}/10: go easy on ${ex.name}.`); }
+      }
+      const fixedCardio = day.fixed.filter(i => i.k === 'cardio'), fixedOther = day.fixed.filter(i => i.k !== 'cardio');
       out.items = [...fixedCardio, ...fixedOther, ...chosen];
       out.minutes = planMinutes(state, out.items);
-      if (chosen.length) extra.push({ ...planDayEvent(state, { date, items: chosen }), date });
+      out.notes = [...new Set(out.notes)];
+      if (!chosen.length && !day.fixed.length) out.notes.push(pool.length ? 'Nothing useful fits: the muscles this day targets are still loaded or already at their weekly target.' : 'Add exercises to "My exercises" so the planner has something to work with.');
+      if (chosen.length) pushEvents(day.date, chosen);
     }
   }
+  // what the plan cannot reach
+  const missing = MUSCLES.filter(m => muscleTarget(settings, m.id).lo > 0 && !reachable.has(m.id)).map(m => m.name);
+  if (missing.length && pool.length) result.notes.push(`Nothing in your exercises trains ${listJoin(missing)}. Add an exercise for ${missing.length > 1 ? 'them' : 'it'} under More, Exercises, or set ${missing.length > 1 ? 'their targets' : 'its target'} to 0.`);
   return result;
 }
+const listJoin = a => a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
 
 /** Weekly sets per muscle a plan would deliver (logged + planned), for the plan preview. */
 export function weekProjection(state, an, week, today = ymd()) {
