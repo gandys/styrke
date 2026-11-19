@@ -112,3 +112,69 @@ test('three months of four days a week plans quickly', () => {
   assert.ok(ms < 2500, 'took ' + Math.round(ms) + ' ms');
   for (const d of Object.values(res.days)) assert.ok(d.items.length > 0);
 });
+
+// every 7 days in a row, over the planned stretch: effective sets per muscle
+function windows(res, from, to) {
+  const daily = {};
+  for (const [d, x] of Object.entries(res.days)) daily[d] = planDayEvent(state, { date: d, items: x.items }).sets;
+  const out = [];
+  for (let e = addDays(from, 6); e <= addDays(to, 6); e = addDays(e, 1)) {
+    const w = {};
+    for (let d = addDays(e, -6); d <= e; d = addDays(d, 1)) for (const m in daily[d] || {}) w[m] = (w[m] || 0) + daily[d][m];
+    out.push({ end: e, w });
+  }
+  return out;
+}
+
+test('days across a week boundary are planned as one stretch, not as two weeks', () => {
+  fresh();
+  const SAT = addDays(MON, 5);   // Sat, Sun, Mon, Tue: two calendar weeks, four days in a row
+  for (const o of [0, 1, 2, 3]) state.plan[addDays(SAT, o)] = { date: addDays(SAT, o), on: true, type: 'auto', items: [], u: 1 };
+  state._rev++;
+  const res = autoPlan(state, analyze(state), { from: SAT, to: addDays(SAT, 3), today: SAT });
+  const S = getSettings(state);
+  for (const { end, w } of windows(res, SAT, addDays(SAT, 3))) for (const m of ['chest', 'lats', 'quads', 'biceps', 'triceps', 'side_delt']) {
+    assert.ok((w[m] || 0) <= muscleTarget(S, m).hi + 3, `${m}: ${(w[m] || 0).toFixed(1)} sets in the 7 days to ${end}, target up to ${muscleTarget(S, m).hi}`);
+  }
+  // and the same muscle is not hammered on the two days either side of the week boundary
+  const sun = daySets(res, addDays(SAT, 1)), mon = daySets(res, addDays(SAT, 2));
+  for (const m of ['chest', 'lats', 'quads']) assert.ok(Math.min(sun[m] || 0, mon[m] || 0) <= 4, `${m} on Sunday ${sun[m]} and Monday ${mon[m]}`);
+});
+
+test('irregular days: a muscle trained just before a gap and just after it is spread by hours, not by weeks', () => {
+  fresh();
+  // Thu, Fri, then nothing until Wed, then Thu
+  const days = [3, 4, 9, 10];
+  for (const o of days) state.plan[addDays(MON, o)] = { date: addDays(MON, o), on: true, type: 'auto', items: [], u: 1 };
+  state._rev++;
+  const to = addDays(MON, 10);
+  const res = autoPlan(state, analyze(state), { from: addDays(MON, 3), to, today: addDays(MON, 3) });
+  const S = getSettings(state);
+  for (const { end, w } of windows(res, addDays(MON, 3), to)) for (const m of ['chest', 'lats', 'quads', 'biceps']) {
+    assert.ok((w[m] || 0) <= muscleTarget(S, m).hi + 3, `${m}: ${(w[m] || 0).toFixed(1)} in the 7 days to ${end}`);
+  }
+  // each muscle is trained on both sides of the gap
+  for (const m of ['chest', 'lats', 'quads']) {
+    const before = (daySets(res, addDays(MON, 3))[m] || 0) + (daySets(res, addDays(MON, 4))[m] || 0);
+    const after = (daySets(res, addDays(MON, 9))[m] || 0) + (daySets(res, addDays(MON, 10))[m] || 0);
+    assert.ok(before >= 2 && after >= 2, `${m} before ${before}, after ${after}`);
+  }
+});
+
+test('planning one day on its own counts the days already planned before and after it', () => {
+  fresh();
+  for (const o of [0, 1, 2, 3, 4]) state.plan[addDays(MON, o)] = { date: addDays(MON, o), on: true, type: 'auto', items: [], u: 1 };
+  state._rev++;
+  const all = autoPlan(state, analyze(state), { from: MON, to: addDays(MON, 4), today: MON });
+  for (const [d, x] of Object.entries(all.days)) state.plan[d].items = x.items;
+  state._rev++;
+  const WED = addDays(MON, 2);
+  const one = autoPlan(state, analyze(state), { from: WED, to: WED, today: MON });
+  state.plan[WED].items = one.days[WED].items; state._rev++;
+  const S = getSettings(state);
+  const res = { days: Object.fromEntries([0, 1, 2, 3, 4].map(o => [addDays(MON, o), { items: state.plan[addDays(MON, o)].items }])) };
+  for (const { end, w } of windows(res, MON, addDays(MON, 4))) for (const m of ['chest', 'lats', 'quads', 'biceps', 'triceps']) {
+    assert.ok((w[m] || 0) <= muscleTarget(S, m).hi + 3, `${m}: ${(w[m] || 0).toFixed(1)} in the 7 days to ${end} after re-planning Wednesday alone`);
+  }
+  assert.ok(one.days[WED].items.length > 0, 'Wednesday still gets a workout');
+});

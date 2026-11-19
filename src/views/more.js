@@ -319,11 +319,12 @@ function science(root, ctx) {
     [1, 6, 12].map(k => h('text', { x: 8 + (k - 0.5) * bw, y: PH - 6, class: 'htx', 'text-anchor': 'middle' }, String(k))),
     h('text', { x: 8 + 7.4 * bw, y: 28, class: 'htx' }, 'from the 7th set: less'));
   const rule = (title, text) => h('div', { class: 'hbadge' }, h('span', { class: 'dot', style: { background: 'var(--accent)' } }), h('div', null, h('b', null, title), h('div', { class: 'note' }, text)));
-  const plannerCard = card(9, 'How the planner builds your week', 'It plans all the days you committed to in a week together. One piece at a time, it adds whatever gives the most growth per minute, until nothing worth the effort fits.',
+  const plannerCard = card(9, 'How the planner builds your plan', 'It plans all the days you committed to together, weeks or months ahead. Muscles do not know about calendar weeks: targets count any 7 days in a row, and recovery runs on the hours between sessions. One piece at a time, it adds whatever gives the most growth per minute, on whichever day it fits best, until nothing worth the effort fits.',
     h('div', { class: 'sub' }, 'Sets for one muscle in one session: what each one adds'),
     perSession,
-    rule('Spread over the week', 'Because sets beyond about 6 in one session add less, a muscle\'s sets go on two or three days rather than one.'),
-    rule('Furthest behind first', 'A muscle far below its weekly target gets priority over one that is nearly there (card 3).'),
+    rule('Spread over your days', 'Because sets beyond about 6 in one session add less, a muscle\'s sets go on two or three days rather than one.'),
+    rule('Any 7 days in a row', 'Every stretch of 7 days is checked against your targets, including the days you just trained. Going over the top of a target in any 7 days costs, so a busy stretch is not followed by more of the same.'),
+    rule('Furthest behind first', 'A muscle far below its target gets priority over one that is nearly there (card 3). The first few sets of a muscle count the most: a muscle left at zero starts to lose what it built.'),
     rule('Fresh muscles', 'Sets on a muscle that still carries load, from the gym or a run, count for less. If an exercise\'s main muscle is tired, the whole exercise counts for less. The Recovery slider sets how strict this is.'),
     rule('Legs fresh for runs', 'Leg work that would still be in your legs when a planned run starts counts against itself, so leg sessions move away from the day before a run.'),
     rule('Every set has a price', 'Each set costs recovery. When the next set gives less than it costs, the planner stops, even if time is left.'),

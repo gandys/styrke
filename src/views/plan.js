@@ -125,7 +125,7 @@ export function renderPlan(root, ctx) {
     h('div', { class: 'tile' }, h('div', { class: 'v' }, streak, h('small', null, streak === 1 ? 'week' : 'weeks')), h('div', { class: 'k' }, 'Full weeks in a row')));
 
   // ---- auto planner
-  const to = range === 7 ? addDays(wk, 6) : addDays(today, range - 1);
+  const to = addDays(today, range - 1);
   const inRange = upcoming.filter(p => p.date <= to);
   const presets = Object.values(state.presets).filter(p => !p.deleted);
   const planner = h('div', { class: 'panel' },
@@ -133,7 +133,7 @@ export function renderPlan(root, ctx) {
     h('p', { class: 'note', style: { marginBottom: '12px' } }, 'Plans each week as a whole for the most muscle growth: it spreads every muscle\'s sets over your days, puts muscles far from their target first, waits for tired muscles and keeps your legs fresh for runs. Sessions fit your time. Days you filled by hand are respected. ',
       h('a', { href: '#more', onClick: e => { e.preventDefault(); ctx.go('more', 'science'); } }, 'How it decides')),
     h('div', { class: 'stack' },
-      seg([{ id: 7, name: 'This week' }, { id: 14, name: 'Next 14 days' }, { id: 28, name: '4 weeks' }, { id: HORIZON, name: 'All' }], range, v => { range = v; ctx.refresh(); }),
+      seg([{ id: 7, name: 'Next 7 days' }, { id: 14, name: '14 days' }, { id: 28, name: '4 weeks' }, { id: HORIZON, name: 'All' }], range, v => { range = v; ctx.refresh(); }),
       presets.length ? seg([{ id: 'exercises', name: 'Build from my exercises' }, { id: 'presets', name: 'Hand out my presets' }], settings.planMode || 'exercises', v => setSetting('planMode', v)) : null,
       (() => { const pool = myExercises(state).filter(e => e.kind === 'strength'); const on = pool.filter(e => e.plan !== false).length; const bl = Object.values(state.blocks).filter(b => !b.deleted && b.plan !== false).length;
         return h('button', { class: 'row', style: { width: '100%', textAlign: 'left', minHeight: '44px' }, onClick: () => poolSheet(ctx) },
@@ -141,19 +141,23 @@ export function renderPlan(root, ctx) {
       h('button', { class: 'row', style: { width: '100%', textAlign: 'left', minHeight: '44px' }, onClick: () => prioritySheet(ctx) },
         h('span', { class: 'grow' }, 'Goal and priorities', h('div', { class: 'note tiny' }, prioritySummary(settings))), h('span', { class: 'tag acc' }, 'Adjust'), icon('right', 16)),
       h('div', { class: 'row' }, h('span', { class: 'grow' }, 'Longest session'), h('div', { style: { width: '92px' } }, numInput(settings.maxMinutes, v => { if (v >= 15) setSetting('maxMinutes', v); }, { int: true, 'aria-label': 'Longest session in minutes', style: 'text-align:center' })), h('span', { class: 'dim' }, 'min')),
-      h('button', { class: 'btn primary block', disabled: !inRange.length, onClick: () => {
-        const n = runAutoPlan(today, to);
-        toast(n ? `Planned ${n} ${n === 1 ? 'day' : 'days'}` : 'No committed days in that range'); ctx.refresh();
+      h('button', { class: 'btn primary block', disabled: !inRange.length, onClick: e => {
+        // planning months ahead takes a moment on a phone: show it, then plan
+        const b = e.currentTarget; b.disabled = true; b.textContent = 'Planning…';
+        setTimeout(() => {
+          const n = runAutoPlan(today, to);
+          toast(n ? `Planned ${n} ${n === 1 ? 'day' : 'days'}` : 'No committed days in that range'); ctx.refresh();
+        }, 30);
       } }, icon('bolt'), inRange.length ? `Plan ${inRange.length} committed ${inRange.length === 1 ? 'day' : 'days'}` : 'Commit to some days first'),
       plannerNotes.length ? h('div', { class: 'banner info', style: { margin: 0 } }, icon('info'), h('div', null, plannerNotes.map(n => h('div', null, n)))) : null));
 
-  // ---- week projection
-  const projWeek = wk;
+  // ---- the next 7 days by muscle (muscles count any 7 days in a row, not calendar weeks)
+  const projWeek = today;
   const proj = weekProjection(state, an, projWeek, today);
   const rows = MUSCLES.map(mu => ({ mu, t: muscleTarget(settings, mu.id), ...proj[mu.id] })).filter(r => r.t.hi > 0);
   const projection = h('div', { class: 'panel' },
-    h('h2', null, 'This week by muscle', h('span', { class: 'note', style: { fontWeight: 400 } }, 'hard sets: done, planned, target')),
-    isDeloadWeek(settings, projWeek) ? h('div', { class: 'banner info' }, icon('info'), 'This is a lighter week.') : null,
+    h('h2', null, 'Next 7 days by muscle', h('span', { class: 'note', style: { fontWeight: 400 } }, 'hard sets: done, planned, target')),
+    isDeloadWeek(settings, wk) ? h('div', { class: 'banner info' }, icon('info'), 'This is a lighter week.') : null,
     h('div', null, rows.map(r => {
       const max = Math.max(r.t.hi * 1.35, r.done + r.planned, 1);
       const total = r.done + r.planned;
@@ -167,7 +171,8 @@ export function renderPlan(root, ctx) {
     })),
     h('div', { class: 'legend', style: { marginTop: '10px' } },
       h('span', null, h('i', { style: { background: 'var(--c1)' } }), 'Done'), h('span', null, h('i', { style: { background: 'var(--c1)', opacity: 0.4 } }), 'Planned'),
-      h('span', null, h('i', { style: { background: 'color-mix(in srgb, var(--good) 26%, transparent)', boxShadow: 'inset 0 0 0 1.5px var(--good)' } }), 'Target range')));
+      h('span', null, h('i', { style: { background: 'color-mix(in srgb, var(--good) 26%, transparent)', boxShadow: 'inset 0 0 0 1.5px var(--good)' } }), 'Target range')),
+    h('p', { class: 'note tiny', style: { marginTop: '8px' } }, 'Targets count any 7 days in a row. The planner checks every such stretch across your plan, including the days you just trained.'));
 
   // ---- upcoming list
   const up = h('div', null,
