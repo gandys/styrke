@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { state, _reset } from '../src/store.js';
 import { analyze, getEx, getSettings, muscleTarget } from '../src/model.js';
-import { autoPlan, planDayEvent, weekValue, weekMarginal, sessionValue } from '../src/planner.js';
+import { autoPlan, planDayEvent, weekValue, weekMarginal, sessionValue, presetItems } from '../src/planner.js';
 import { MUSCLE } from '../src/library.js';
 import { addDays } from '../src/util.js';
 
@@ -177,4 +177,26 @@ test('planning one day on its own counts the days already planned before and aft
     assert.ok((w[m] || 0) <= muscleTarget(S, m).hi + 3, `${m}: ${(w[m] || 0).toFixed(1)} in the 7 days to ${end} after re-planning Wednesday alone`);
   }
   assert.ok(one.days[WED].items.length > 0, 'Wednesday still gets a workout');
+});
+
+test('a run and legs tomorrow: no leg work today, whether you plan many days or just today', () => {
+  for (const tomorrow of ['typed', 'preset']) {
+    fresh();
+    state.ex.treadmill_run = { id: 'treadmill_run', mine: true, u: 1 };
+    state.presets.p = { id: 'p', name: 'Run + legs', items: [{ k: 'cardio', ex: 'treadmill_run', min: 35, rpe: 4 }, { k: 'ex', ex: 'leg_press', sets: 3 }, { k: 'ex', ex: 'db_rdl', sets: 3 }, { k: 'ex', ex: 'calf_raise', sets: 3 }], u: 1 };
+    const TOM = addDays(MON, 1);
+    state.plan[MON] = { date: MON, on: true, type: 'auto', items: [], u: 1 };
+    state.plan[TOM] = tomorrow === 'typed'
+      ? { date: TOM, on: true, type: 'legs', items: [{ id: 'r', k: 'cardio', ex: 'treadmill_run', min: 35, rpe: 4, src: 'user' }], u: 1 }
+      : { date: TOM, on: true, type: 'custom', items: presetItems(state, state.presets.p), u: 1 };
+    for (const o of [3, 5, 7, 9, 10, 12, 14]) state.plan[addDays(MON, o)] = { date: addDays(MON, o), on: true, type: 'auto', items: [], u: 1 };
+    state._rev++;
+    const legs = items => { const s = planDayEvent(state, { date: MON, items }).sets; return ['quads', 'hamstrings', 'calves'].reduce((a, m) => a + (s[m] || 0), 0); };
+    const many = autoPlan(state, analyze(state), { from: MON, to: addDays(MON, 15), today: MON });
+    assert.ok(legs(many.days[MON].items) < 1.5, `${tomorrow}: planning 16 days leaves today free of legs: ${legs(many.days[MON].items)}`);
+    for (const [d, x] of Object.entries(many.days)) state.plan[d].items = x.items;
+    state._rev++;
+    const one = autoPlan(state, analyze(state), { from: MON, to: MON, today: MON });
+    assert.ok(Math.abs(legs(one.days[MON].items) - legs(many.days[MON].items)) < 1.5, `${tomorrow}: planning today alone agrees`);
+  }
 });

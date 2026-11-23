@@ -181,7 +181,7 @@ const MAX_SETS = 5;         // sets of one exercise in one session
 const SET_WORTH = [1, 1, 1, 0.9, 0.75];   // reps drop as sets of the same exercise pile up
 const MIN_GAIN = 0.05;      // stop when the best addition, after its fatigue cost, gains less than this per set
 const FATIGUE_COST = 0.12;  // cost of one unit of load (a hard set for one muscle): recovery you spend on it
-const RUN_COST = 9;         // cost of load still left in a muscle when a planned run (or other cardio) starts; longer runs weigh more
+const RUN_COST = 5;         // cost of load still left in a muscle when a planned run (or other cardio) starts; longer runs weigh more
 const SESSION_SETS = 18;    // past this many hard sets in one session, each extra set costs more (the session wears you down)
 const SESSION_COST = 0.02;
 const sessionCost = n => SESSION_COST * Math.max(0, n - SESSION_SETS) ** 2;
@@ -287,7 +287,10 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
     }
     if (deload) out.notes.push('Lighter week: one set fewer per exercise.');
     out.notes = [...new Set(out.notes)];
-    if (type === 'rest' || type === 'custom') {
+    // a day you filled yourself (presets, for example) is kept as it is; if it has strength work it still
+    // takes part, so the days before it leave the muscles it trains fresh enough
+    const fixedLifting = fixed.some(i => i.k !== 'cardio');
+    if (type === 'rest' || (type === 'custom' && !fixedLifting)) {
       out.items = fixed; out.minutes = planMinutes(state, fixed);
       for (const it of fixed) if (it.k !== 'cardio') { const e = itemEvent(state, it, 0); for (const m in e.sets) if (base[m]) base[m][ix(date)] += e.sets[m]; }
       continue;
@@ -309,7 +312,7 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
       date, type, t: dayTime(date), ti: ix(date), out, fixed, pd, deload,
       budget: (pd.minutes || settings.maxMinutes) * (deload ? 0.85 : 1),
       base: planMinutes(state, fixedOther) + fixedCardioMin * (settings.cardioInBudget ? 1 : 0.5),
-      hasStrength: fixedOther.length > 0, items: [], locked: false, fixedS: {},
+      hasStrength: fixedOther.length > 0, items: [], locked: type === 'custom', fixedS: {},
     };
     for (const it of fixedOther) { const e = itemEvent(state, it, day.t); for (const m in e.sets) day.fixedS[m] = (day.fixedS[m] || 0) + e.sets[m]; }
     D.push(day);
@@ -340,7 +343,9 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
       const o = {};
       for (const ev of extra) {
         if (!ev.cardio || ev.t <= day.t || ev.t > day.t + 72 * 3600e3) continue;
-        for (const m in ev.muscles) if (HL[m]) o[m] = (o[m] || 0) + lambda * Math.min(3, ev.muscles[m] / 4) * Math.pow(0.5, (ev.t - day.t) / 3600e3 / HL[m]) / day.capM[m];
+        // the share of the gym's load still in the muscle when the run starts, weighed by how much the run uses it.
+        // Not scaled down by capacity: lots of running makes the legs fitter, not keener on arriving tired.
+        for (const m in ev.muscles) if (HL[m]) o[m] = (o[m] || 0) + lambda * Math.min(3, ev.muscles[m] / 4) * Math.pow(0.5, (ev.t - day.t) / 3600e3 / HL[m]);
       }
       day.runCost = o;
     }
@@ -594,28 +599,64 @@ export function autoPlan(state, an, { from, to, today = ymd() } = {}) {
   // keep it if it still beats every other option's earlier score. The day that changed is scored afresh.
   const fresh = i => candidatesFor(i).map(scoreOf).filter(Boolean).sort((x, y) => y.score - x.score);
   const lists = D.map((_, i) => fresh(i));   // each day's options, best first
-  let placed = 0;
-  for (let guard = 0; guard < 400000 && placed < 60 * D.length + 100; guard++) {
-    let ti = -1, second = -Infinity;
-    for (let i = 0; i < lists.length; i++) {
-      const c = lists[i][0]; if (!c) continue;
-      if (ti < 0 || c.score > lists[ti][0].score) { if (ti >= 0) second = Math.max(second, lists[ti][0].score); ti = i; }
-      else if (c.score > second) second = c.score;
+  const fill = only => {
+    let placed = 0;
+    for (let guard = 0; guard < 400000 && placed < 60 * D.length + 100; guard++) {
+      let ti = -1, second = -Infinity;
+      for (let i = 0; i < lists.length; i++) {
+        if (only != null && i !== only) continue;
+        const c = lists[i][0]; if (!c) continue;
+        if (ti < 0 || c.score > lists[ti][0].score) { if (ti >= 0) second = Math.max(second, lists[ti][0].score); ti = i; }
+        else if (c.score > second) second = c.score;
+      }
+      if (ti < 0) break;
+      if (lists[ti][1]) second = Math.max(second, lists[ti][1].score);
+      const now = scoreOf(lists[ti][0]);
+      if (!now || now.score < second - 1e-12) {
+        // worth less than it was: put it back in its place in the day's list (or drop it)
+        lists[ti].shift();
+        if (now) { let k = 0; while (k < lists[ti].length && lists[ti][k].score > now.score) k++; lists[ti].splice(k, 0, now); }
+        continue;
+      }
+      if (now.kind === 'set') bump(now.i, now.it, 'sets');
+      else if (now.kind === 'round') bump(now.i, now.it, 'rounds');
+      else place(now.i, { ...now.it, id: uid('i'), src: 'auto' });
+      placed++;
+      lists[now.i] = fresh(now.i);
     }
-    if (ti < 0) break;
-    if (lists[ti][1]) second = Math.max(second, lists[ti][1].score);
-    const now = scoreOf(lists[ti][0]);
-    if (!now || now.score < second - 1e-12) {
-      // worth less than it was: put it back in its place in the day's list (or drop it)
-      lists[ti].shift();
-      if (now) { let k = 0; while (k < lists[ti].length && lists[ti][k].score > now.score) k++; lists[ti].splice(k, 0, now); }
-      continue;
+  };
+  fill(null);
+
+  // ----- 3b. second look, day by day: early in the search every later day is still empty, so a day can get
+  // work that later days end up doing anyway (legs today and legs tomorrow, say). Plan each near day again
+  // with all the others as they now are, and keep the new version only if the whole plan gets better.
+  const objective = () => {
+    let v = 0;
+    for (const m of MIDS) for (let e = 6; e < N; e++) v += winValue(m, Wn[m][e], Rn[m][e], e, SumW[m], SumR[m]);
+    for (let i = 0; i < D.length; i++) {
+      for (const m in L[i]) v -= (kappa + (D[i].runCost[m] || 0)) * L[i][m];
+      v -= sessionCost(daySetCount(i));
     }
-    if (now.kind === 'set') bump(now.i, now.it, 'sets');
-    else if (now.kind === 'round') bump(now.i, now.it, 'rounds');
-    else place(now.i, { ...now.it, id: uid('i'), src: 'auto' });
-    placed++;
-    lists[now.i] = fresh(now.i);
+    return v;
+  };
+  const unplace = (i, it) => { const old = { ...R[i] }; contrib(it, -1, S[i], L[i], J[i], R[i]); D[i].items = D[i].items.filter(x => x !== it); commitDay(i, touchedBy(it), old); };
+  const mine = i => D[i].items.filter(x => x.src === 'auto' && !x.mode && !x.pre);
+  const replanDay = i => {
+    if (D[i].locked) return false;
+    const before = objective();
+    const old = mine(i).map(x => ({ x, sets: x.sets, rounds: x.rounds }));
+    for (const { x } of old) unplace(i, x);
+    lists[i] = fresh(i); fill(i);
+    if (objective() > before + 1e-6) return true;
+    for (const x of mine(i)) unplace(i, x);   // not better: put the day back as it was
+    for (const { x, sets, rounds } of old) { if (sets != null) x.sets = sets; if (rounds != null) x.rounds = rounds; place(i, x); }
+    return false;
+  };
+  const nearEnd = ix(from) + 21;   // the next three weeks; later days get the same look as they come closer
+  for (let pass = 0; pass < 2; pass++) {
+    let changed = false;
+    for (let i = 0; i < D.length && D[i].ti < nearEnd; i++) if (replanDay(i)) changed = true;
+    if (!changed) break;
   }
 
   // ----- 4. write the days out
